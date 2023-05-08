@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx"
+, "pages/webcam.jsx", "pages/home.jsx", "pages/_app.jsx"  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
