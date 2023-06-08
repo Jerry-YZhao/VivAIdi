@@ -1,3 +1,4 @@
+<h2>VivAIdi</h2>
 <p align="center"><img src="https://media.discordapp.net/attachments/972589733786058843/1105533891529425046/vivaidi-low-resolution-logo-black-on-white-background.png?width=1370&height=1028"></p>
 <h2> Inspiration</h2>
 <p> Some of us have always dreamed of being a conducter, composing our own pieces of classical musics and conducting them. With the help of generative AI this task has never been easier than before. Imagine with melodies in mind and simple gestures, the whole orchestra is manipulatable around the tips of your fingers! How much of a help would that be for a genre of music that is slowing dying out of the spotlight, and the learners who are intimidated by the "complex" structure of classical music. With the help of modern technology, VivAIdi is a way to preserve the fire that has been passed down for generations. </p>
