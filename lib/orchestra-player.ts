@@ -1,14 +1,20 @@
-import { styleById } from "./styles";
-import { partsDuration, type ArrangementParts } from "./composer";
-import type { LayerState, SectionId, StyleId } from "./types";
-import { SECTIONS } from "./types";
+import type { Arrangement } from "./arrangement";
+import { midiToName } from "./music/theory";
+import { styleById, type EnsembleStyle, type PartSpec } from "./styles";
+import type { LayerState, StyleId } from "./types";
+
+type Voice = { stop: (when?: number) => void } | undefined;
+
+type PlayOptions = {
+  duration?: number;
+  gain?: number;
+  attack?: number;
+  release?: number;
+};
 
 type SoundfontInstrument = {
-  play: (
-    note: number | string,
-    time?: number,
-    options?: { duration?: number; gain?: number },
-  ) => { stop: (when?: number) => void };
+  play: (note: number | string, time?: number, options?: PlayOptions) => Voice;
+  buffers?: Record<string, unknown>;
 };
 
 type SoundfontModule = {
@@ -19,15 +25,9 @@ type SoundfontModule = {
       destination?: AudioNode;
       soundfont?: string;
       format?: string;
+      notes?: string[];
     },
   ) => Promise<SoundfontInstrument>;
-};
-
-const BASE_PAN: Record<SectionId, number> = {
-  lead: -0.52,
-  harmony: -0.28,
-  body: 0.48,
-  bass: 0,
 };
 
 export type OrchestraPlayer = {
@@ -36,94 +36,161 @@ export type OrchestraPlayer = {
   isPlaying: () => boolean;
   load: (style: StyleId, onStatus?: (msg: string) => void) => Promise<void>;
   warmup: () => Promise<void>;
-  play: (parts: ArrangementParts, loop?: boolean) => Promise<void>;
+  play: (arrangement: Arrangement, loop?: boolean) => Promise<void>;
   stop: () => void;
   setLayers: (layers: LayerState) => void;
   setDynamics: (value: number) => void;
-  setPan: (handX: number) => void;
+  /** Hand position, 0 left to 1 right, biases which families sit forward. */
+  setFocus: (handX: number) => void;
   setCut: (cut: boolean) => void;
   dispose: () => void;
 };
 
-function makeHallImpulse(ctx: AudioContext, seconds = 1.8) {
-  const length = Math.floor(ctx.sampleRate * seconds);
+const SILENT = 0.0001;
+
+function makeHallImpulse(ctx: AudioContext, seconds: number) {
+  const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
   const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
   for (let ch = 0; ch < 2; ch++) {
     const data = buffer.getChannelData(ch);
     for (let i = 0; i < length; i++) {
       const t = i / length;
-      const decay = Math.pow(1 - t, 2.4) * Math.exp(-t * 3.2);
+      const decay = Math.pow(1 - t, 2.2) * Math.exp(-t * 2.6);
       data[i] = (Math.random() * 2 - 1) * decay * (ch === 0 ? 1 : 0.92);
     }
   }
   return buffer;
 }
 
-const WET: Record<SectionId, number> = {
-  lead: 0.28,
-  harmony: 0.34,
-  body: 0.3,
-  bass: 0.12,
-};
+/** Only decode the notes a player can actually reach. */
+function rangeNoteNames(range: [number, number]): string[] {
+  const names: string[] = [];
+  for (let midi = Math.max(21, range[0] - 2); midi <= Math.min(108, range[1] + 2); midi++) {
+    names.push(midiToName(midi));
+  }
+  return names;
+}
+
+/** Sample keys are remapped to MIDI numbers once loaded. */
+function coversRange(instrument: SoundfontInstrument, range: [number, number]): boolean {
+  const buffers = instrument.buffers;
+  if (!buffers) return false;
+  const available = new Set(Object.keys(buffers).map(Number));
+  for (let midi = range[0]; midi <= range[1]; midi++) {
+    if (!available.has(midi)) return false;
+  }
+  return true;
+}
+
+type GroupBus = { layer: GainNode; send: GainNode; focus: GainNode; pan: number };
+type PartBus = { input: GainNode; panner: StereoPannerNode };
 
 function createOrchestraPlayer(): OrchestraPlayer {
   const ctx = new AudioContext();
-  const master = ctx.createGain();
-  master.gain.value = 0.78;
 
   const compressor = ctx.createDynamicsCompressor();
-  compressor.threshold.value = -18;
-  compressor.knee.value = 12;
-  compressor.ratio.value = 2.4;
-  compressor.attack.value = 0.012;
-  compressor.release.value = 0.22;
-
-  const convolver = ctx.createConvolver();
-  convolver.buffer = makeHallImpulse(ctx);
-  const wetGain = ctx.createGain();
-  wetGain.gain.value = 0.42;
-  convolver.connect(wetGain);
-  wetGain.connect(compressor);
-  master.connect(compressor);
+  compressor.threshold.value = -17;
+  compressor.knee.value = 14;
+  compressor.ratio.value = 2.2;
+  compressor.attack.value = 0.014;
+  compressor.release.value = 0.24;
   compressor.connect(ctx.destination);
 
-  const gains = {} as Record<SectionId, GainNode>;
-  const pans = {} as Record<SectionId, StereoPannerNode>;
-  const instruments = {} as Partial<Record<SectionId, SoundfontInstrument>>;
-  const active: { stop: (when?: number) => void }[] = [];
-  let loopTimer = 0;
+  const master = ctx.createGain();
+  master.gain.value = 0.72;
+  master.connect(compressor);
+
+  const convolver = ctx.createConvolver();
+  const wetGain = ctx.createGain();
+  wetGain.gain.value = 0.4;
+  convolver.connect(wetGain);
+  wetGain.connect(compressor);
+
+  const groups = new Map<string, GroupBus>();
+  const partBuses = new Map<string, PartBus>();
+  const instruments = new Map<string, { main: SoundfontInstrument; alt?: SoundfontInstrument }>();
+  const active: NonNullable<Voice>[] = [];
+
   let loadedStyle: StyleId | null = null;
   let loadTask: Promise<void> | null = null;
+  let loopTimer = 0;
   let playing = false;
   let cut = false;
-  let layers: LayerState = {
-    lead: true,
-    harmony: false,
-    body: false,
-    bass: false,
-  };
+  let layers: LayerState = {};
 
-  for (const section of SECTIONS) {
-    const g = ctx.createGain();
-    g.gain.value = section.id === "lead" ? 1 : 0.0001;
-    const p = ctx.createStereoPanner();
-    p.pan.value = BASE_PAN[section.id];
-    const send = ctx.createGain();
-    send.gain.value = WET[section.id];
-    g.connect(p);
-    p.connect(master);
-    p.connect(send);
-    send.connect(convolver);
-    gains[section.id] = g;
-    pans[section.id] = p;
+  function teardownGraph() {
+    for (const bus of groups.values()) {
+      bus.layer.disconnect();
+      bus.send.disconnect();
+      bus.focus.disconnect();
+    }
+    for (const bus of partBuses.values()) {
+      bus.input.disconnect();
+      bus.panner.disconnect();
+    }
+    groups.clear();
+    partBuses.clear();
+    instruments.clear();
+  }
+
+  function buildGraph(style: EnsembleStyle) {
+    teardownGraph();
+    convolver.buffer = makeHallImpulse(ctx, style.reverbSeconds);
+    wetGain.gain.value = style.wetMix;
+
+    for (const group of style.groups) {
+      const members = style.parts.filter((p) => p.groupId === group.id);
+      const seatPan = members.length
+        ? members.reduce((s, p) => s + p.pan, 0) / members.length
+        : 0;
+      const layer = ctx.createGain();
+      layer.gain.value = group.cue === 0 ? 1 : SILENT;
+      const send = ctx.createGain();
+      send.gain.value = layer.gain.value;
+      const focus = ctx.createGain();
+      focus.gain.value = 1;
+      layer.connect(focus);
+      focus.connect(master);
+      send.connect(convolver);
+      groups.set(group.id, { layer, send, focus, pan: seatPan });
+    }
+
+    for (const part of style.parts) {
+      const group = groups.get(part.groupId);
+      if (!group) continue;
+      const input = ctx.createGain();
+      input.gain.value = part.gain;
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = part.pan;
+      let tail: AudioNode = input;
+      if (part.tone) {
+        const filter = ctx.createBiquadFilter();
+        filter.type = part.tone.type;
+        filter.frequency.value = part.tone.frequency;
+        filter.gain.value = part.tone.gain;
+        input.connect(filter);
+        tail = filter;
+      }
+      tail.connect(panner);
+      panner.connect(group.layer);
+      const wet = ctx.createGain();
+      wet.gain.value = part.wet;
+      panner.connect(wet);
+      wet.connect(group.send);
+      partBuses.set(part.id, { input, panner });
+    }
+
+    layers = Object.fromEntries(style.groups.map((g) => [g.id, g.cue === 0]));
   }
 
   function applyLayers(now = ctx.currentTime, tau = 0.18) {
-    (Object.keys(layers) as SectionId[]).forEach((id) => {
-      const target = cut ? 0.0001 : layers[id] ? 1 : 0.0001;
-      gains[id].gain.cancelScheduledValues(now);
-      gains[id].gain.setTargetAtTime(target, now, tau);
-    });
+    for (const [id, bus] of groups) {
+      const target = cut ? SILENT : layers[id] ? 1 : SILENT;
+      for (const node of [bus.layer, bus.send]) {
+        node.gain.cancelScheduledValues(now);
+        node.gain.setTargetAtTime(target, now, tau);
+      }
+    }
   }
 
   function clearVoices() {
@@ -138,8 +205,9 @@ function createOrchestraPlayer(): OrchestraPlayer {
     }
   }
 
-  function allLoaded() {
-    return SECTIONS.every((s) => instruments[s.id]);
+  function allLoaded(style: EnsembleStyle | null) {
+    if (!style) return false;
+    return style.parts.every((part) => instruments.has(part.id));
   }
 
   async function ensureRunning() {
@@ -149,51 +217,92 @@ function createOrchestraPlayer(): OrchestraPlayer {
     }
   }
 
-  function schedule(parts: ArrangementParts, when: number) {
-    if (!allLoaded()) return;
-    for (const section of SECTIONS) {
-      const inst = instruments[section.id];
-      if (!inst) continue;
-      for (const note of parts[section.id]) {
-        const node = inst.play(note.pitchMidi, when + note.startTimeSeconds, {
+  async function loadSampleSet(
+    Soundfont: SoundfontModule,
+    name: string,
+    spec: PartSpec,
+    destination: AudioNode,
+  ): Promise<SoundfontInstrument> {
+    const common = {
+      destination,
+      soundfont: "FluidR3_GM",
+      format: "mp3",
+    };
+    const trimmed = await Soundfont.instrument(ctx, name, {
+      ...common,
+      notes: rangeNoteNames(spec.range),
+    });
+    if (coversRange(trimmed, spec.range)) return trimmed;
+    // Unexpected sample naming: fall back to the full set rather than go silent.
+    return Soundfont.instrument(ctx, name, common);
+  }
+
+  function schedule(arrangement: Arrangement, when: number) {
+    for (const part of arrangement.parts) {
+      const set = instruments.get(part.id);
+      if (!set) continue;
+      for (const note of part.notes) {
+        const player = note.articulation && set.alt ? set.alt : set.main;
+        const options: PlayOptions = {
           duration: Math.max(0.08, note.durationSeconds),
-          gain: Math.min(1, Math.max(0.15, note.amplitude)),
-        });
-        active.push(node);
+          gain: Math.min(1, Math.max(0.05, note.amplitude)),
+        };
+        if (note.attack !== undefined) options.attack = note.attack;
+        if (note.release !== undefined) options.release = note.release;
+        const voice = player.play(note.pitchMidi, when + note.startTimeSeconds, options);
+        if (voice) active.push(voice);
       }
     }
   }
 
   const player: OrchestraPlayer = {
     ctx,
-    loadedStyle: () => (allLoaded() ? loadedStyle : null),
+    loadedStyle: () =>
+      loadedStyle && allLoaded(styleById(loadedStyle)) ? loadedStyle : null,
     isPlaying: () => playing,
-    async load(style, onStatus) {
-      if (loadedStyle === style && allLoaded()) {
-        return;
-      }
+    async load(styleId, onStatus) {
+      const style = styleById(styleId);
+      if (loadedStyle === styleId && allLoaded(style)) return;
       if (loadTask) {
         await loadTask;
-        if (loadedStyle === style && allLoaded()) return;
+        if (loadedStyle === styleId && allLoaded(style)) return;
       }
       loadTask = (async () => {
-        const names = styleById(style).instruments;
+        clearVoices();
+        playing = false;
+        buildGraph(style);
         const mod = await import("soundfont-player");
         const Soundfont = ((mod as { default?: SoundfontModule }).default ??
           mod) as SoundfontModule;
-        onStatus?.("Tuning the ensemble…");
+
+        let ready = 0;
+        const announce = (label: string) => {
+          ready++;
+          onStatus?.(`${label} ready (${ready}/${style.parts.length})`);
+        };
+        onStatus?.(`Seating ${style.parts.length} players\u2026`);
+
         const loaded = await Promise.all(
-          SECTIONS.map(async (section) => {
-            const inst = await Soundfont.instrument(ctx, names[section.id], {
-              destination: gains[section.id],
-              soundfont: "FluidR3_GM",
-              format: "mp3",
-            });
-            return [section.id, inst] as const;
+          style.parts.map(async (part) => {
+            const bus = partBuses.get(part.id);
+            if (!bus) return null;
+            const main = await loadSampleSet(
+              Soundfont,
+              part.instrument,
+              part,
+              bus.input,
+            );
+            const alt = part.altInstrument
+              ? await loadSampleSet(Soundfont, part.altInstrument, part, bus.input)
+              : undefined;
+            announce(part.label);
+            return { id: part.id, main, alt };
           }),
         );
-        for (const [id, inst] of loaded) instruments[id] = inst;
-        loadedStyle = style;
+        for (const entry of loaded) {
+          if (entry) instruments.set(entry.id, { main: entry.main, alt: entry.alt });
+        }
+        loadedStyle = styleId;
       })();
       try {
         await loadTask;
@@ -203,36 +312,37 @@ function createOrchestraPlayer(): OrchestraPlayer {
     },
     async warmup() {
       await ensureRunning();
-      if (!allLoaded()) return;
+      const style = loadedStyle ? styleById(loadedStyle) : null;
+      if (!allLoaded(style) || !style) return;
       const now = ctx.currentTime;
-      for (const section of SECTIONS) {
-        const inst = instruments[section.id];
-        if (!inst) continue;
+      for (const part of style.parts) {
+        const set = instruments.get(part.id);
+        if (!set) continue;
+        const pitch = Math.round((part.range[0] + part.range[1]) / 2);
         try {
-          const node = inst.play(60, now, { duration: 0.08, gain: 0.0001 });
-          node.stop(now + 0.1);
+          set.main.play(pitch, now, { duration: 0.05, gain: SILENT })?.stop(now + 0.08);
+          set.alt?.play(pitch, now, { duration: 0.05, gain: SILENT })?.stop(now + 0.08);
         } catch {
-          /* some fonts reject out-of-range primes */
+          /* some sample sets reject the first prime */
         }
       }
       await new Promise((r) => window.setTimeout(r, 120));
     },
-    async play(parts, loop = true) {
+    async play(arrangement, loop = true) {
       clearVoices();
       await ensureRunning();
-      if (!allLoaded()) {
+      const style = styleById(arrangement.style);
+      if (loadedStyle !== arrangement.style || !allLoaded(style)) {
         throw new Error("Instruments are not ready yet.");
       }
       applyLayers(ctx.currentTime, 0.05);
-      const start = ctx.currentTime + 0.25;
-      const dur = partsDuration(parts);
-      schedule(parts, start);
+      const dur = arrangement.durationSeconds;
+      schedule(arrangement, ctx.currentTime + 0.3);
       playing = true;
       if (loop) {
         const tick = () => {
           if (ctx.state !== "running") return;
-          const next = ctx.currentTime + 0.12;
-          schedule(parts, next);
+          schedule(arrangement, ctx.currentTime + 0.12);
           loopTimer = window.setTimeout(tick, dur * 1000);
         };
         loopTimer = window.setTimeout(tick, dur * 1000);
@@ -243,24 +353,25 @@ function createOrchestraPlayer(): OrchestraPlayer {
       playing = false;
     },
     setLayers(next) {
-      layers = next;
+      layers = { ...layers, ...next };
       applyLayers(ctx.currentTime, 0.2);
     },
     setDynamics(value) {
       const v = Math.min(1, Math.max(0.08, value));
       const now = ctx.currentTime;
       master.gain.cancelScheduledValues(now);
-      master.gain.setTargetAtTime(cut ? 0.0001 : v, now, 0.1);
+      master.gain.setTargetAtTime(cut ? SILENT : v * 0.9, now, 0.1);
     },
-    setPan(handX) {
+    setFocus(handX) {
+      // Leaning towards a side brings that side of the stage forward instead of
+      // sliding the whole ensemble's stereo image.
       const bias = (Math.min(1, Math.max(0, handX)) - 0.5) * 2;
       const now = ctx.currentTime;
-      (Object.keys(BASE_PAN) as SectionId[]).forEach((id) => {
-        const extra = id === "bass" ? 0.12 : 0.22;
-        const pan = Math.min(1, Math.max(-1, BASE_PAN[id] + bias * extra));
-        pans[id].pan.cancelScheduledValues(now);
-        pans[id].pan.setTargetAtTime(pan, now, 0.12);
-      });
+      for (const bus of groups.values()) {
+        const emphasis = Math.min(1.5, Math.max(0.6, 1 + bias * bus.pan * 0.55));
+        bus.focus.gain.cancelScheduledValues(now);
+        bus.focus.gain.setTargetAtTime(emphasis, now, 0.14);
+      }
     },
     setCut(next) {
       cut = next;
@@ -268,6 +379,7 @@ function createOrchestraPlayer(): OrchestraPlayer {
     },
     dispose() {
       clearVoices();
+      teardownGraph();
       loadedStyle = null;
       void ctx.close();
     },

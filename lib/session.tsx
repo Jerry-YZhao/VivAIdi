@@ -8,18 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ArrangementParts } from "./composer";
+import type { Arrangement } from "./arrangement";
+import { defaultLayers } from "./gestures";
 import { disposeOrchestraPlayer } from "./orchestra-player";
 import type { PitchTrack, Sensitivity } from "./pitch-track";
-import {
-  defaultLayers,
-  type LayerState,
-  type NoteEvent,
-  type Phase,
-  type StyleId,
-} from "./types";
-
-export type GenerationSource = "ensemble";
+import { styleById } from "./styles";
+import type { LayerState, NoteEvent, Phase, StyleId } from "./types";
 
 type StudioState = {
   phase: Phase;
@@ -29,14 +23,11 @@ type StudioState = {
   notes: NoteEvent[];
   liveNote: string | null;
   style: StyleId;
-  generatedUrl: string | null;
-  generatedBuffer: AudioBuffer | null;
-  parts: ArrangementParts | null;
+  arrangement: Arrangement | null;
   layers: LayerState;
   dynamics: number;
   status: string | null;
   generating: boolean;
-  source: GenerationSource | null;
 };
 
 type StudioApi = StudioState & {
@@ -47,12 +38,7 @@ type StudioApi = StudioState & {
   setNotes: (notes: NoteEvent[]) => void;
   setLiveNote: (note: string | null) => void;
   setStyle: (style: StyleId) => void;
-  setArrangement: (input: {
-    source: GenerationSource;
-    url?: string | null;
-    buffer?: AudioBuffer | null;
-    parts?: ArrangementParts | null;
-  }) => void;
+  setArrangement: (arrangement: Arrangement | null) => void;
   setLayers: (layers: LayerState) => void;
   setDynamics: (v: number) => void;
   setStatus: (s: string | null) => void;
@@ -62,6 +48,8 @@ type StudioApi = StudioState & {
 
 const StudioContext = createContext<StudioApi | null>(null);
 
+const INITIAL_STYLE: StyleId = "orchestra";
+
 export function StudioProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>("compose");
   const [humBlob, setHum] = useState<Blob | null>(null);
@@ -69,35 +57,20 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [sensitivity, setSensitivity] = useState<Sensitivity>("balanced");
   const [notes, setNotes] = useState<NoteEvent[]>([]);
   const [liveNote, setLiveNote] = useState<string | null>(null);
-  const [style, setStyle] = useState<StyleId>("chamber");
-  const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
-  const [generatedBuffer, setGeneratedBuffer] = useState<AudioBuffer | null>(
-    null,
+  const [style, setStyleId] = useState<StyleId>(INITIAL_STYLE);
+  const [arrangement, setArrangement] = useState<Arrangement | null>(null);
+  const [layers, setLayers] = useState<LayerState>(() =>
+    defaultLayers(styleById(INITIAL_STYLE).groups),
   );
-  const [parts, setParts] = useState<ArrangementParts | null>(null);
-  const [layers, setLayers] = useState<LayerState>(defaultLayers);
   const [dynamics, setDynamics] = useState(0.62);
   const [status, setStatus] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [source, setSource] = useState<GenerationSource | null>(null);
 
-  const setArrangement = useCallback(
-    (input: {
-      source: GenerationSource;
-      url?: string | null;
-      buffer?: AudioBuffer | null;
-      parts?: ArrangementParts | null;
-    }) => {
-      setGeneratedUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return input.url ?? null;
-      });
-      setGeneratedBuffer(input.buffer ?? null);
-      setParts(input.parts ?? null);
-      setSource(input.source);
-    },
-    [],
-  );
+  // Each ensemble has its own conduct groups, so the mixer resets with the style.
+  const setStyle = useCallback((next: StyleId) => {
+    setStyleId(next);
+    setLayers(defaultLayers(styleById(next).groups));
+  }, []);
 
   const resetPiece = useCallback(() => {
     setPhase("compose");
@@ -105,14 +78,14 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setTrack(null);
     setNotes([]);
     setLiveNote(null);
-    setArrangement({ source: "ensemble", url: null, buffer: null, parts: null });
-    setSource(null);
-    setLayers(defaultLayers());
+    setArrangement(null);
+    setLayers(defaultLayers(styleById(INITIAL_STYLE).groups));
+    setStyleId(INITIAL_STYLE);
     setDynamics(0.62);
     setStatus(null);
     setGenerating(false);
     disposeOrchestraPlayer();
-  }, [setArrangement]);
+  }, []);
 
   const value = useMemo<StudioApi>(
     () => ({
@@ -123,14 +96,11 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       notes,
       liveNote,
       style,
-      generatedUrl,
-      generatedBuffer,
-      parts,
+      arrangement,
       layers,
       dynamics,
       status,
       generating,
-      source,
       setPhase,
       setHum,
       setTrack,
@@ -153,15 +123,12 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       notes,
       liveNote,
       style,
-      generatedUrl,
-      generatedBuffer,
-      parts,
+      arrangement,
       layers,
       dynamics,
       status,
       generating,
-      source,
-      setArrangement,
+      setStyle,
       resetPiece,
     ],
   );

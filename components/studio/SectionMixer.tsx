@@ -1,32 +1,30 @@
 "use client";
 
-import { SECTIONS, type LayerState, type SectionId } from "@/lib/types";
-
-const LABELS: Record<SectionId, string> = {
-  lead: "I",
-  harmony: "II",
-  body: "III",
-  bass: "IV",
-};
+import type { ConductGroupSpec } from "@/lib/styles";
+import type { LayerState } from "@/lib/types";
 
 export function SectionMixer({
+  groups,
   layers,
   onToggle,
 }: {
+  groups: ConductGroupSpec[];
   layers: LayerState;
-  onToggle: (id: SectionId) => void;
+  onToggle: (id: string) => void;
 }) {
   return (
     <div className="flex items-end justify-center gap-3 md:gap-5">
-      {SECTIONS.map((section) => {
-        const on = layers[section.id];
+      {groups.map((group) => {
+        const on = Boolean(layers[group.id]);
         return (
           <button
-            key={section.id}
+            key={group.id}
             type="button"
-            onClick={() => onToggle(section.id)}
+            onClick={() => onToggle(group.id)}
             className="group flex flex-col items-center gap-2"
-            aria-label={section.label}
+            aria-label={group.label}
+            aria-pressed={on}
+            title={group.label}
           >
             <div
               className="w-8 transition-all duration-500 md:w-10"
@@ -43,7 +41,7 @@ export function SectionMixer({
                 on ? "text-brass" : "text-ivory-muted/40"
               }`}
             >
-              {LABELS[section.id]}
+              {group.short}
             </span>
           </button>
         );

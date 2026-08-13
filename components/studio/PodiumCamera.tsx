@@ -4,12 +4,15 @@ import { useEffect, useRef } from "react";
 import {
   centroid,
   convexHull,
+  defaultLayers,
   fingertipPoints,
+  gestureSignature,
   handExtension,
   readConductGesture,
   type Landmark,
 } from "@/lib/gestures";
 import type { ConductGesture } from "@/lib/gestures";
+import type { ConductGroupSpec } from "@/lib/styles";
 
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -17,8 +20,10 @@ const WASM_ROOT =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 
 export function PodiumCamera({
+  groups,
   onGesture,
 }: {
+  groups: ConductGroupSpec[];
   onGesture: (g: ConductGesture) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -27,7 +32,13 @@ export function PodiumCamera({
   const lastSig = useRef("");
   const smoothExt = useRef(0);
   const onGestureRef = useRef(onGesture);
-  onGestureRef.current = onGesture;
+  const groupsRef = useRef(groups);
+
+  // The detection loop runs outside React, so it reads the latest values here.
+  useEffect(() => {
+    onGestureRef.current = onGesture;
+    groupsRef.current = groups;
+  }, [groups, onGesture]);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -76,8 +87,13 @@ export function PodiumCamera({
             draw(image, smoothExt.current, now);
 
             if (world && image) {
-              const g = readConductGesture(image, world, smoothExt.current);
-              const sig = `${g.cut}-${g.swell}-${g.layers.harmony}-${g.layers.body}-${g.layers.bass}-${Math.round(g.pan * 8)}-${Math.round(g.dynamics * 10)}`;
+              const g = readConductGesture(
+                image,
+                world,
+                smoothExt.current,
+                groupsRef.current,
+              );
+              const sig = gestureSignature(g);
               if (sig !== lastSig.current) {
                 lastSig.current = sig;
                 onGestureRef.current(g);
@@ -90,11 +106,10 @@ export function PodiumCamera({
       } catch (err) {
         console.error(err);
         onGestureRef.current({
-          layers: { lead: true, harmony: false, body: false, bass: false },
+          layers: defaultLayers(groupsRef.current),
           dynamics: 0.7,
-          pan: 0.5,
+          focus: 0.5,
           cut: false,
-          swell: false,
           hint: "Camera unavailable — use the section pads",
         });
       }

@@ -1,3 +1,4 @@
+import type { ConductGroupSpec } from "./styles";
 import type { LayerState } from "./types";
 
 export type Landmark = { x: number; y: number; z: number };
@@ -5,9 +6,9 @@ export type Landmark = { x: number; y: number; z: number };
 export type ConductGesture = {
   layers: LayerState;
   dynamics: number;
-  pan: number;
+  /** Where the hand sits across the stage, 0 left to 1 right. */
+  focus: number;
   cut: boolean;
-  swell: boolean;
   hint: string;
 };
 
@@ -61,7 +62,6 @@ export function isFist(landmarks: Landmark[]): boolean {
   return open.filter((v) => v < 0.62).length >= 3;
 }
 
-
 export function convexHull(points: Landmark[]): Landmark[] {
   const pts = points
     .map((p) => ({ x: p.x, y: p.y, z: p.z }))
@@ -112,50 +112,78 @@ export function dynamicsFromHand(landmarks: Landmark[]): number {
   return Math.min(1, Math.max(0.12, 1 - mid));
 }
 
-/** Mirrored selfie: visual left (strings) is high landmark x. 0 = left, 1 = right. */
-export function panFromHand(landmarks: Landmark[]): number {
+/** Mirrored selfie view: visual left is a high landmark x. 0 = left, 1 = right. */
+export function focusFromHand(landmarks: Landmark[]): number {
   const wrist = landmarks[WRIST] ?? centroid(landmarks);
   return clamp01(1 - wrist.x);
 }
 
-export function layersFromExtension(extension: number): LayerState {
-  return {
-    lead: true,
-    harmony: extension >= 0.2,
-    body: extension >= 0.45,
-    bass: extension >= 0.7,
-  };
+function cuedGroups(groups: ConductGroupSpec[]): ConductGroupSpec[] {
+  return groups.filter((g) => g.cue > 0).sort((a, b) => a.cue - b.cue);
 }
 
-export function sectionCountFromExtension(extension: number): number {
-  const layers = layersFromExtension(extension);
-  return [layers.lead, layers.harmony, layers.body, layers.bass].filter(Boolean)
-    .length;
+/** Threshold at which each cued group joins as the hand opens. */
+export function cueThreshold(index: number, count: number): number {
+  if (count <= 1) return 0.4;
+  return 0.16 + (index * 0.62) / (count - 1);
+}
+
+export function layersFromExtension(
+  groups: ConductGroupSpec[],
+  extension: number,
+): LayerState {
+  const layers: LayerState = {};
+  for (const group of groups) layers[group.id] = group.cue === 0;
+  const cued = cuedGroups(groups);
+  cued.forEach((group, i) => {
+    layers[group.id] = extension >= cueThreshold(i, cued.length);
+  });
+  return layers;
+}
+
+export function silentLayers(groups: ConductGroupSpec[]): LayerState {
+  return Object.fromEntries(groups.map((g) => [g.id, false]));
+}
+
+export function defaultLayers(groups: ConductGroupSpec[]): LayerState {
+  return Object.fromEntries(groups.map((g) => [g.id, g.cue === 0]));
+}
+
+function describe(groups: ConductGroupSpec[], layers: LayerState): string {
+  const active = groups.filter((g) => layers[g.id]);
+  if (!active.length) return "Silent";
+  if (active.length === groups.length) return "Tutti \u2014 full ensemble";
+  return active.map((g) => g.label).join(" + ");
 }
 
 export function readConductGesture(
   image: Landmark[],
   world: Landmark[],
   extension: number,
+  groups: ConductGroupSpec[],
 ): ConductGesture {
   const fist = isFist(world);
-  const layers = fist
-    ? { lead: false, harmony: false, body: false, bass: false }
-    : layersFromExtension(extension);
-  const pan = panFromHand(image);
+  const layers = fist ? silentLayers(groups) : layersFromExtension(groups, extension);
+  const focus = focusFromHand(image);
   const dynamics = fist ? 0.08 : dynamicsFromHand(image);
 
-  let hint = "Lead — spread to add the ensemble";
-  if (fist) hint = "Cut — fist mutes the orchestra";
-  else {
-    const n = sectionCountFromExtension(extension);
-    if (n === 2) hint = "Lead + Harmony";
-    else if (n === 3) hint = "Lead + Harmony + Body";
-    else if (n >= 4) hint = "Tutti — full ensemble";
-    hint += " · raise hand for volume";
+  let hint: string;
+  if (fist) {
+    hint = "Cut \u2014 fist silences the ensemble";
+  } else {
+    hint = `${describe(groups, layers)} \u00b7 raise your hand for volume`;
+    if (focus < 0.35) hint += " \u00b7 left of the stage forward";
+    else if (focus > 0.65) hint += " \u00b7 right of the stage forward";
   }
-  if (!fist && pan < 0.35) hint += " · strings left";
-  else if (!fist && pan > 0.65) hint += " · brass right";
 
-  return { layers, dynamics, pan, cut: fist, swell: false, hint };
+  return { layers, dynamics, focus, cut: fist, hint };
+}
+
+/** Stable signature used to throttle gesture updates. */
+export function gestureSignature(g: ConductGesture): string {
+  const on = Object.keys(g.layers)
+    .sort()
+    .map((id) => (g.layers[id] ? "1" : "0"))
+    .join("");
+  return `${g.cut}-${on}-${Math.round(g.focus * 8)}-${Math.round(g.dynamics * 10)}`;
 }

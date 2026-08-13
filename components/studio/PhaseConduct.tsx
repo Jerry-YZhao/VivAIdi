@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStudio } from "@/lib/session";
-import type { ConductGesture } from "@/lib/gestures";
+import { defaultLayers, type ConductGesture } from "@/lib/gestures";
 import {
   getOrchestraPlayer,
   type OrchestraPlayer,
@@ -14,13 +14,14 @@ import { SectionMixer } from "./SectionMixer";
 
 export function PhaseConduct() {
   const {
-    parts,
+    arrangement,
     layers,
     setLayers,
     dynamics,
     setDynamics,
     setPhase,
     setStatus,
+    setArrangement,
     style,
   } = useStudio();
 
@@ -43,23 +44,23 @@ export function PhaseConduct() {
   }, [dynamics]);
 
   useEffect(() => {
-    if (!parts) return;
+    if (!arrangement) return;
     const orchestra = getOrchestraPlayer();
     orchestraRef.current = orchestra;
     let cancelled = false;
 
     const start = async () => {
-      if (orchestra.loadedStyle() !== style) {
+      if (orchestra.loadedStyle() !== arrangement.style) {
         setReady(false);
         setStatus("Tuning instruments…");
-        await orchestra.load(style, setStatus);
+        await orchestra.load(arrangement.style, setStatus);
         await orchestra.warmup();
       }
       if (cancelled) return;
       orchestra.setLayers(layers);
       orchestra.setDynamics(dynamics);
       if (!orchestra.isPlaying()) {
-        await orchestra.play(parts, true);
+        await orchestra.play(arrangement, true);
       }
       if (cancelled) return;
       setPlaying(true);
@@ -79,7 +80,7 @@ export function PhaseConduct() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parts, style]);
+  }, [arrangement]);
 
   const onGesture = useCallback(
     (g: ConductGesture) => {
@@ -88,7 +89,7 @@ export function PhaseConduct() {
       setLayers(g.layers);
       setDynamics(g.dynamics);
       setGestureHint(g.hint);
-      orchestra?.setPan(g.pan);
+      orchestra?.setFocus(g.focus);
       orchestra?.setCut(g.cut);
     },
     [ready, setDynamics, setLayers],
@@ -96,25 +97,32 @@ export function PhaseConduct() {
 
   const togglePlay = async () => {
     const orchestra = orchestraRef.current;
-    if (!orchestra || !parts || !ready) return;
+    if (!orchestra || !arrangement || !ready) return;
     if (playing) {
       orchestra.stop();
       setPlaying(false);
     } else {
-      await orchestra.play(parts, true);
+      await orchestra.play(arrangement, true);
       setPlaying(true);
     }
   };
 
-  if (!parts) {
+  const leaveHall = () => {
+    orchestraRef.current?.stop();
+    setArrangement(null);
+    setLayers(defaultLayers(styleById(style).groups));
+    setPhase("compose");
+  };
+
+  if (!arrangement) {
     return (
       <div className="flex flex-1 items-center justify-center py-20">
         <button
           type="button"
-          onClick={() => setPhase("compose")}
+          onClick={leaveHall}
           className="font-display text-lg font-medium text-brass/80 hover:text-brass"
         >
-          Return to compose a theme
+          Choose an ensemble
         </button>
       </div>
     );
@@ -129,19 +137,20 @@ export function PhaseConduct() {
     );
   }
 
-  const ensemble = styleById(style).label;
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Stage — full viewport performance */}
       <Stage className="relative min-h-0 flex-1">
-        <PodiumCamera onGesture={onGesture} />
+        <PodiumCamera groups={arrangement.groups} onGesture={onGesture} />
 
         {/* Floating programme card — top */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-ink/70 to-transparent px-6 py-5 text-center">
           <p className="hall-signage text-xs opacity-70">Now performing</p>
           <p className="font-display text-xl font-semibold text-brass md:text-2xl">
-            {ensemble}
+            {arrangement.label}
+          </p>
+          <p className="hall-signage mt-1 text-[10px] opacity-50">
+            {arrangement.keyLabel} · {arrangement.qpm} bpm · {arrangement.bars} bars
           </p>
         </div>
 
@@ -155,6 +164,7 @@ export function PhaseConduct() {
         {/* Orchestra section lights — bottom */}
         <div className="stage-controls absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-ink/90 via-ink/50 to-transparent px-6 pb-5 pt-16">
           <SectionMixer
+            groups={arrangement.groups}
             layers={layers}
             onToggle={(id) => setLayers({ ...layers, [id]: !layers[id] })}
           />
@@ -190,10 +200,7 @@ export function PhaseConduct() {
 
             <button
               type="button"
-              onClick={() => {
-                orchestraRef.current?.stop();
-                setPhase("compose");
-              }}
+              onClick={leaveHall}
               className="text-xs tracking-[0.25em] text-ivory-muted/50 uppercase transition hover:text-ivory-muted"
             >
               Exit
@@ -212,9 +219,12 @@ export function PhaseConduct() {
               Conducting
             </p>
             <div className="hall-signage mt-6 space-y-3 text-xs leading-relaxed normal-case">
-              <p>Spread your fingers to bring in sections</p>
+              <p>
+                Spread your fingers to cue{" "}
+                {arrangement.groups.map((g) => g.label).join(", ")}
+              </p>
               <p>Raise your hand for louder dynamics</p>
-              <p>Move left for strings, right for brass</p>
+              <p>Move across the stage to bring that side forward</p>
               <p>Fist to cut the ensemble</p>
             </div>
             <button

@@ -12,7 +12,8 @@ import {
   type Sensitivity,
 } from "@/lib/pitch-track";
 import { playMelody } from "@/lib/melody-preview";
-import { generateArrangement } from "@/lib/composer";
+import { composeArrangement } from "@/lib/composer";
+import { defaultLayers } from "@/lib/gestures";
 import { getOrchestraPlayer } from "@/lib/orchestra-player";
 import { ENSEMBLES } from "@/lib/styles";
 import { ProgrammeCaption } from "./Auditorium";
@@ -32,6 +33,7 @@ export function PhaseCompose() {
     setPhase,
     setStatus,
     setArrangement,
+    setLayers,
     style,
     setStyle,
     notes,
@@ -47,7 +49,6 @@ export function PhaseCompose() {
   const [elapsed, setElapsed] = useState(0);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [previewing, setPreviewing] = useState(false);
-  const [showOptions, setShowOptions] = useState(false);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -172,7 +173,6 @@ export function PhaseCompose() {
       });
       setTrack(pitchTrack);
       applyTrack(pitchTrack, sensitivity);
-      setShowOptions(true);
     } catch {
       setTrack(null);
       setNotes([]);
@@ -209,16 +209,18 @@ export function PhaseCompose() {
     setGenerating(true);
     try {
       setStatus("The musicians are studying your theme…");
-      const parts = generateArrangement(notes, style, setStatus);
-      setArrangement({ source: "ensemble", parts });
+      const arrangement = composeArrangement(notes, style);
+      setArrangement(arrangement);
 
       const orchestra = getOrchestraPlayer();
       await orchestra.load(style, setStatus);
       setStatus("The hall falls silent…");
       await orchestra.warmup();
-      orchestra.setLayers({ lead: true, harmony: false, body: false, bass: false });
+      const opening = defaultLayers(arrangement.groups);
+      setLayers(opening);
+      orchestra.setLayers(opening);
       orchestra.setDynamics(0.62);
-      await orchestra.play(parts, true);
+      await orchestra.play(arrangement, true);
 
       setStatus(null);
       setPhase("conduct");
@@ -297,7 +299,7 @@ export function PhaseCompose() {
       </div>
 
       <AnimatePresence>
-        {hasTheme && !recording && !analyzing && showOptions && (
+        {hasTheme && !recording && !analyzing && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
@@ -322,6 +324,9 @@ export function PhaseCompose() {
                   </button>
                 ))}
               </div>
+              <p className="hall-signage mt-4 text-xs normal-case text-ivory-muted/60">
+                {ENSEMBLES.find((ens) => ens.id === style)?.blurb}
+              </p>
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-6 text-xs tracking-widest text-ivory-muted uppercase">
