@@ -1,10 +1,20 @@
-<h1>VivAIdi (MetHacks2023)</h1>
-<p align="center"><img src="https://media.discordapp.net/attachments/972589733786058843/1105533891529425046/vivaidi-low-resolution-logo-black-on-white-background.png?width=1370&height=1028"></p>
-<h2> Inspiration</h2>
-<p> Some of us have always dreamed of being a conducter, composing our own pieces of classical musics and conducting them. With the help of generative AI this task has never been easier than before. Imagine with melodies in mind and simple gestures, the whole orchestra is manipulatable around the tips of your fingers! How much of a help would that be for a genre of music that is slowing dying out of the spotlight, and the learners who are intimidated by the "complex" structure of classical music. With the help of modern technology, VivAIdi is a way to preserve the fire that has been passed down for generations. </p>
+# VivAIdi
 
-<h2> What it does </h2>
-<p> VivAIdi picks up a pice of melody from the user microphone, which can either be humming, singing, beatboxing, or any from of music that can be think of. From there, the user can choose a from of music they with to produce. Upon that, the user can start/end recording. The system will then generate new layered melodies based on the input with MagentaAI. Both temperature and length of the melodies are customizable by the user. In the meantime, the webcam takes in users' gestures with CV. The user can gesture the number 1-4 to prodetually layer each melody layer on top (1-4: highest to lowest frequency sound parts). </p>
+Hum a melody. Conduct a 16-bar ensemble with your hands.
 
-<h2> How we built it </h2>
-<p> VivAIdi's foundation is built on top of electron.js, as a local application. The AutoCorrelate algorithms is used to transform user inputs' file format to note sequences. We calculated the most weighted note being played in a set time interval and tracked the number of intervals it was being played, to get the duration of each note. We feeded this information into MagentaAI(Tensorflow), and with the help of the pre-trained melody_RNN model, generated simillar melody patterns. We used this newly generated melody as reference for AI generated accompanying sound parts. With SoundFonts applied to each of them, the feeling of an orchestra/chamber music is presented. On the gesture tracking aspect, we used tensorflow and openCV to measure users' relative finger positions, forming 21 spots of reference. It then compares to the hand cutoff that was being fed into the machine, teaching it the gestures. </p>
+## Pipeline
+
+1. **Compose** — [Spotify Basic Pitch](https://basicpitch.spotify.com) transcribes the hum
+2. **Arrange** — a 16-bar composer writes independent Lead / Harmony / Body / Bass parts
+3. **Conduct** — [MediaPipe](https://ai.google.dev/edge/mediapipe) Hands: spread cues sections, height is dynamics, left/right pans strings/brass, fist cuts, open palm is tutti
+
+Playback is FluidR3 SoundFonts so each section can be conducted live.
+
+## Setup
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). Mic and camera need localhost or HTTPS.

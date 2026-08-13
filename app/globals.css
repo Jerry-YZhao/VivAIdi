@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #0a0a0b;
+  --charcoal: #14141a;
+  --charcoal-deep: #0e0e12;
+  --wood: #2b1f18;
+  --wood-light: #3d2c1f;
+  --amber: #e8a548;
+  --amber-dim: #a97a3a;
+  --steel: #6b6b72;
+  --ivory: #f2f0ec;
+  --ivory-muted: #8f8d92;
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-charcoal: var(--charcoal);
+  --color-wood: var(--wood);
+  --color-wood-light: var(--wood-light);
+  --color-brass: var(--amber);
+  --color-brass-dim: var(--amber-dim);
+  --color-steel: var(--steel);
+  --color-ivory: var(--ivory);
+  --color-ivory-muted: var(--ivory-muted);
+  --font-display: var(--font-space-grotesk);
+  --font-sans: var(--font-figtree);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--ink);
+  color: var(--ivory);
+  font-family: var(--font-figtree), system-ui, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-space-grotesk), system-ui, sans-serif;
+}
+
+/* Modern concert hall — architectural light wash, no drapery */
+.hall {
+  background:
+    radial-gradient(ellipse 65% 40% at 50% 0%, rgba(232, 165, 72, 0.09), transparent 65%),
+    radial-gradient(ellipse 120% 50% at 50% 100%, rgba(43, 31, 24, 0.4), transparent 60%),
+    linear-gradient(180deg, #0a0a0b 0%, #14141a 45%, #0a0a0b 100%);
+}
+
+/* Ceiling light coves — concentric architectural rings, like a modern hall canopy */
+.hall-canopy {
+  pointer-events: none;
+  position: absolute;
+  inset-x: 0;
+  top: 0;
+  height: 55%;
+  opacity: 0.5;
+  background-image: repeating-radial-gradient(
+    ellipse 140% 100% at 50% -20%,
+    transparent 0,
+    transparent 38px,
+    rgba(232, 165, 72, 0.05) 39px,
+    rgba(232, 165, 72, 0.05) 40px
+  );
+  mask-image: linear-gradient(180deg, black 0%, transparent 100%);
+}
+
+/* Stage frame — brushed steel line, single downlight beam */
+.stage-frame {
+  position: relative;
+}
+.stage-frame::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(242, 240, 236, 0.06);
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.55);
+  z-index: 5;
+}
+.stage-frame::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(232, 165, 72, 0.55) 30%,
+    rgba(242, 240, 236, 0.7) 50%,
+    rgba(232, 165, 72, 0.55) 70%,
+    transparent
+  );
+  z-index: 6;
+}
+
+/* Subtle film grain */
+.grain {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Warm wood stage floor glow */
+.pit-glow {
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 45%;
+  background:
+    linear-gradient(180deg, transparent 0%, rgba(43, 31, 24, 0.5) 100%),
+    radial-gradient(ellipse 70% 100% at 50% 100%, rgba(232, 165, 72, 0.07), transparent 70%);
+}
+
+/* Hall signage — architectural wayfinding type, not programme-note serif */
+.hall-signage {
+  font-family: var(--font-figtree), system-ui, sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ivory-muted);
+  font-weight: 500;
+}
+
+/* Fade-in controls on hover for conduct phase */
+.stage-controls {
+  opacity: 0.4;
+  transition: opacity 0.4s ease;
+}
+.stage-controls:hover,
+.stage-controls:focus-within {
+  opacity: 1;
+}
