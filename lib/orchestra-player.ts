@@ -1,7 +1,7 @@
 import type { Arrangement } from "./arrangement";
 import { midiToName } from "./music/theory";
 import { styleById, type EnsembleStyle, type PartSpec } from "./styles";
-import type { LayerState, StyleId } from "./types";
+import type { LayerState, NoteEvent, StyleId } from "./types";
 
 type Voice = { stop: (when?: number) => void } | undefined;
 
@@ -48,6 +48,20 @@ export type OrchestraPlayer = {
 
 const SILENT = 0.0001;
 
+/**
+ * The conduct phase runs a hand-landmark model alongside playback, which stalls
+ * the main thread in bursts. Audio is therefore scheduled well ahead of the
+ * clock and topped up often, so a late timer costs nothing audible.
+ */
+const LOOKAHEAD_SECONDS = 2.5;
+const WATCHDOG_MS = 200;
+/**
+ * Scheduling a whole 16-bar pass at once meant building several hundred voices
+ * in one synchronous burst, which dropped camera frames every loop. Work is
+ * capped per tick instead; the look-ahead leaves ample slack to catch up.
+ */
+const NOTES_PER_TICK = 64;
+
 function makeHallImpulse(ctx: AudioContext, seconds: number) {
   const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
   const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
@@ -84,6 +98,9 @@ function coversRange(instrument: SoundfontInstrument, range: [number, number]): 
 
 type GroupBus = { layer: GainNode; send: GainNode; focus: GainNode; pan: number };
 type PartBus = { input: GainNode; panner: StereoPannerNode };
+type Sounding = { voice: NonNullable<Voice>; endsAt: number };
+/** The whole piece flattened and sorted once, so playback never re-derives it. */
+type TimelineNote = { partId: string; note: NoteEvent };
 
 function createOrchestraPlayer(): OrchestraPlayer {
   const ctx = new AudioContext();
@@ -109,14 +126,22 @@ function createOrchestraPlayer(): OrchestraPlayer {
   const groups = new Map<string, GroupBus>();
   const partBuses = new Map<string, PartBus>();
   const instruments = new Map<string, { main: SoundfontInstrument; alt?: SoundfontInstrument }>();
-  const active: NonNullable<Voice>[] = [];
+  const active: Sounding[] = [];
 
   let loadedStyle: StyleId | null = null;
   let loadTask: Promise<void> | null = null;
-  let loopTimer = 0;
+  let watchdog = 0;
   let playing = false;
   let cut = false;
   let layers: LayerState = {};
+  /** Remembered so releasing a cut can restore the level on its own. */
+  let dynamics = 0.62;
+  let current: Arrangement | null = null;
+  let looping = false;
+  let timeline: TimelineNote[] = [];
+  let cursor = 0;
+  /** Start of the pass being scheduled, in AudioContext time. */
+  let passStart = 0;
 
   function teardownGraph() {
     for (const bus of groups.values()) {
@@ -193,15 +218,32 @@ function createOrchestraPlayer(): OrchestraPlayer {
     }
   }
 
+  function applyDynamics(tau = 0.1) {
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setTargetAtTime(cut ? SILENT : dynamics * 0.9, now, tau);
+  }
+
   function clearVoices() {
-    window.clearTimeout(loopTimer);
-    loopTimer = 0;
+    window.clearInterval(watchdog);
+    watchdog = 0;
+    looping = false;
+    current = null;
+    timeline = [];
+    cursor = 0;
     while (active.length) {
       try {
-        active.pop()?.stop(0);
+        active.pop()?.voice.stop(0);
       } catch {
         /* already stopped */
       }
+    }
+  }
+
+  /** Drop finished voices so a long performance does not accumulate them. */
+  function prune(now: number) {
+    for (let i = active.length - 1; i >= 0; i--) {
+      if (active[i].endsAt < now) active.splice(i, 1);
     }
   }
 
@@ -237,22 +279,85 @@ function createOrchestraPlayer(): OrchestraPlayer {
     return Soundfont.instrument(ctx, name, common);
   }
 
-  function schedule(arrangement: Arrangement, when: number) {
+  /** Flatten the score once, in playing order. */
+  function buildTimeline(arrangement: Arrangement): TimelineNote[] {
+    const flat: TimelineNote[] = [];
     for (const part of arrangement.parts) {
-      const set = instruments.get(part.id);
-      if (!set) continue;
-      for (const note of part.notes) {
-        const player = note.articulation && set.alt ? set.alt : set.main;
-        const options: PlayOptions = {
-          duration: Math.max(0.08, note.durationSeconds),
-          gain: Math.min(1, Math.max(0.05, note.amplitude)),
-        };
-        if (note.attack !== undefined) options.attack = note.attack;
-        if (note.release !== undefined) options.release = note.release;
-        const voice = player.play(note.pitchMidi, when + note.startTimeSeconds, options);
-        if (voice) active.push(voice);
-      }
+      if (!instruments.has(part.id)) continue;
+      for (const note of part.notes) flat.push({ partId: part.id, note });
     }
+    return flat.sort((a, b) => a.note.startTimeSeconds - b.note.startTimeSeconds);
+  }
+
+  function playNote(item: TimelineNote, at: number) {
+    const set = instruments.get(item.partId);
+    if (!set) return;
+    const { note } = item;
+    const player = note.articulation && set.alt ? set.alt : set.main;
+    const duration = Math.max(0.08, note.durationSeconds);
+    const options: PlayOptions = {
+      duration,
+      gain: Math.min(1, Math.max(0.05, note.amplitude)),
+    };
+    if (note.attack !== undefined) options.attack = note.attack;
+    if (note.release !== undefined) options.release = note.release;
+    const voice = player.play(note.pitchMidi, at, options);
+    // The extra second covers the sample's own release tail.
+    if (voice) active.push({ voice, endsAt: at + duration + 1 });
+  }
+
+  /**
+   * Top up the schedule from the audio clock. Note times are absolute multiples
+   * of the piece length, so repeats never drift and the loop seam stays in time
+   * however busy the main thread is.
+   */
+  function pump() {
+    if (!playing || !current || !timeline.length) return;
+    // The browser can suspend the context under us; recover instead of dying.
+    if (ctx.state !== "running") {
+      void ctx.resume().catch(() => {});
+      return;
+    }
+    const now = ctx.currentTime;
+    prune(now);
+    const dur = current.durationSeconds;
+
+    if (cursor >= timeline.length) {
+      if (!looping) {
+        playing = false;
+        window.clearInterval(watchdog);
+        watchdog = 0;
+        return;
+      }
+      passStart += dur;
+      cursor = 0;
+    }
+
+    // Only a stall longer than the look-ahead can leave us behind. Pick the
+    // music up from a fresh downbeat rather than firing every missed note.
+    if (passStart + timeline[cursor].note.startTimeSeconds < now - 0.25) {
+      passStart = now + 0.05;
+      cursor = 0;
+    }
+
+    const horizon = now + LOOKAHEAD_SECONDS;
+    for (let i = 0; i < NOTES_PER_TICK; i++) {
+      if (cursor >= timeline.length) {
+        if (!looping) break;
+        passStart += dur;
+        cursor = 0;
+      }
+      const item = timeline[cursor];
+      const at = passStart + item.note.startTimeSeconds;
+      if (at > horizon) break;
+      playNote(item, at);
+      cursor++;
+    }
+  }
+
+  function startWatchdog() {
+    window.clearInterval(watchdog);
+    watchdog = window.setInterval(pump, WATCHDOG_MS);
   }
 
   const player: OrchestraPlayer = {
@@ -336,17 +441,14 @@ function createOrchestraPlayer(): OrchestraPlayer {
         throw new Error("Instruments are not ready yet.");
       }
       applyLayers(ctx.currentTime, 0.05);
-      const dur = arrangement.durationSeconds;
-      schedule(arrangement, ctx.currentTime + 0.3);
+      current = arrangement;
+      timeline = buildTimeline(arrangement);
+      cursor = 0;
+      passStart = ctx.currentTime + 0.35;
+      looping = loop;
       playing = true;
-      if (loop) {
-        const tick = () => {
-          if (ctx.state !== "running") return;
-          schedule(arrangement, ctx.currentTime + 0.12);
-          loopTimer = window.setTimeout(tick, dur * 1000);
-        };
-        loopTimer = window.setTimeout(tick, dur * 1000);
-      }
+      pump();
+      startWatchdog();
     },
     stop() {
       clearVoices();
@@ -357,10 +459,8 @@ function createOrchestraPlayer(): OrchestraPlayer {
       applyLayers(ctx.currentTime, 0.2);
     },
     setDynamics(value) {
-      const v = Math.min(1, Math.max(0.08, value));
-      const now = ctx.currentTime;
-      master.gain.cancelScheduledValues(now);
-      master.gain.setTargetAtTime(cut ? SILENT : v * 0.9, now, 0.1);
+      dynamics = Math.min(1, Math.max(0.08, value));
+      applyDynamics();
     },
     setFocus(handX) {
       // Leaning towards a side brings that side of the stage forward instead of
@@ -376,6 +476,9 @@ function createOrchestraPlayer(): OrchestraPlayer {
     setCut(next) {
       cut = next;
       applyLayers(ctx.currentTime, next ? 0.04 : 0.16);
+      // Restoring the level here means a released cut always sounds again, even
+      // if no dynamic gesture follows it.
+      applyDynamics(next ? 0.04 : 0.16);
     },
     dispose() {
       clearVoices();

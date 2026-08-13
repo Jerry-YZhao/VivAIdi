@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { composeArrangement } from "../lib/composer";
 import type { Arrangement, ArrangementPart } from "../lib/arrangement";
+import { EXAMPLES } from "../lib/examples";
 import { BARS, BEATS_PER_BAR } from "../lib/music/form";
 import { ENSEMBLES, styleById } from "../lib/styles";
 import type { StyleId } from "../lib/types";
@@ -319,6 +320,17 @@ describe("ensembles", () => {
         `${styleId} altered the opening statement too much ` +
           `(best fidelity ${statements[0].fidelity.toFixed(2)})`,
       );
+    }
+  });
+
+  it("scores every known concert theme", () => {
+    for (const example of EXAMPLES) {
+      const arrangement = composeArrangement(example.notes, "orchestra");
+      assert.ok(
+        arrangement.parts.length > 0,
+        `${example.id} produced an empty score`,
+      );
+      assert.equal(arrangement.bars, 16);
     }
   });
 });

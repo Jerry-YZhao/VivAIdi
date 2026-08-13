@@ -90,15 +90,15 @@ function constrainRegister(notes: GridNote[], center: number): GridNote[] {
  * continuation towards the half cadence, return, and a 3-2-1 cadential close.
  */
 export function draftLead(analysis: ThemeAnalysis): GridNote[] {
-  const { basicIdea: idea, tonicPc, mode, centerPitch } = analysis;
+  const { basicIdea: idea, themePhrase, tonicPc, mode, centerPitch } = analysis;
   const bar = (n: number) => n * BEATS_PER_BAR;
   if (!idea.length) return [];
 
   const out: GridNote[] = [];
 
-  // Presentation: statement then repetition.
-  out.push(...shiftNotes(idea, bar(0), 0, tonicPc, mode));
-  out.push(...shiftNotes(idea, bar(2), 0, tonicPc, mode));
+  // Presentation: the theme exactly as it was sung. Anything shorter than four
+  // bars has already been repeated to fill the phrase.
+  out.push(...trimTo(themePhrase, bar(4)));
 
   // Continuation: two-beat fragment in an ascending arch.
   const frag = head(idea, 2);
@@ -176,13 +176,17 @@ function dedupe(notes: GridNote[]): GridNote[] {
   return out;
 }
 
-/** Bars where the hum should stay literally intact. */
-const VERBATIM_BARS = new Set([0, 1, 8, 9]);
+/**
+ * Bars quoting the hum note for note. The harmony planner already scores
+ * candidates against this melody, so the chords bend to the tune here rather
+ * than the other way round — the singer must hear their own theme back.
+ */
+const VERBATIM_BARS = new Set([0, 1, 2, 3, 8, 9]);
 
 /**
  * Reconcile the drafted line with the chosen harmony. Structural notes take
- * chord tones; passing notes only have to stay in the key. The opening
- * statement is protected so the singer still recognises their tune.
+ * chord tones; passing notes only have to stay in the key. The quoted bars are
+ * left exactly as sung.
  */
 export function finalizeLead(
   draft: GridNote[],
@@ -195,8 +199,15 @@ export function finalizeLead(
     const chord = chordAtBeat(chords, note.startBeat);
     const bar = Math.floor(note.startBeat / BEATS_PER_BAR);
     const structural = isDownbeat(note.startBeat) || note.durBeats >= 2;
-    const window = VERBATIM_BARS.has(bar) ? 2 : 4;
 
+    if (VERBATIM_BARS.has(bar)) {
+      return {
+        ...note,
+        amp: Math.min(1, note.amp * 0.7 + chord.dyn * 0.45),
+      };
+    }
+
+    const window = 4;
     let pitch = note.pitch;
     if (structural) {
       const target = nearestPc(pitch, chord.pcs, pitch - window, pitch + window);

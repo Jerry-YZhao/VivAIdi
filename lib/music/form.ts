@@ -60,11 +60,17 @@ type SlotSeed = Omit<Slot, "index" | "role" | "dyn" | "startBeat"> & {
 function seeds(): SlotSeed[] {
   const bar = (n: number) => n * BEATS_PER_BAR;
   return [
-    // Presentation: tonic prolonged, one chord per bar.
+    // Presentation: the basic idea over a prolonged tonic, then a varied
+    // repetition free to move twice a bar. A quoted four-bar tune usually needs
+    // a predominant in its second half, and forcing the tonic there fought the
+    // melody instead of supporting it.
     { bar: 0, startBeat: bar(0), durBeats: 4, degree: 0, inversion: 0 },
-    { bar: 1, startBeat: bar(1), durBeats: 4 },
-    { bar: 2, startBeat: bar(2), durBeats: 4, degree: 0 },
-    { bar: 3, startBeat: bar(3), durBeats: 4 },
+    { bar: 1, startBeat: bar(1), durBeats: 2 },
+    { bar: 1, startBeat: bar(1) + 2, durBeats: 2 },
+    { bar: 2, startBeat: bar(2), durBeats: 2 },
+    { bar: 2, startBeat: bar(2) + 2, durBeats: 2 },
+    { bar: 3, startBeat: bar(3), durBeats: 2 },
+    { bar: 3, startBeat: bar(3) + 2, durBeats: 2 },
 
     // Continuation: two chords per bar, closing with a half cadence.
     { bar: 4, startBeat: bar(4), durBeats: 2 },

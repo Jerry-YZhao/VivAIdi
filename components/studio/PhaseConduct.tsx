@@ -12,6 +12,9 @@ import { Stage, ProgrammeCaption } from "./Auditorium";
 import { PodiumCamera } from "./PodiumCamera";
 import { SectionMixer } from "./SectionMixer";
 
+/** How often the readouts refresh while a hand keeps moving. */
+const UI_FLUSH_MS = 180;
+
 export function PhaseConduct() {
   const {
     arrangement,
@@ -26,6 +29,8 @@ export function PhaseConduct() {
   } = useStudio();
 
   const orchestraRef = useRef<OrchestraPlayer | null>(null);
+  const lastCued = useRef("");
+  const lastFlush = useRef(0);
   const [playing, setPlaying] = useState(false);
   const [ready, setReady] = useState(false);
   const [gestureHint, setGestureHint] = useState("");
@@ -86,11 +91,28 @@ export function PhaseConduct() {
     (g: ConductGesture) => {
       if (!ready) return;
       const orchestra = orchestraRef.current;
+      // Audio is driven straight from the detection loop. Routing it through
+      // React state made every hand movement re-render the whole studio, which
+      // starved the scheduler and the camera alike.
+      orchestra?.setLayers(g.layers);
+      orchestra?.setDynamics(g.dynamics);
+      orchestra?.setFocus(g.focus);
+      orchestra?.setCut(g.cut);
+
+      // The panels only mirror what is already happening, so they can lag.
+      const cued = `${g.cut ? "c" : "o"}${Object.keys(g.layers)
+        .sort()
+        .map((id) => (g.layers[id] ? "1" : "0"))
+        .join("")}`;
+      const now = performance.now();
+      if (cued === lastCued.current && now - lastFlush.current < UI_FLUSH_MS) {
+        return;
+      }
+      lastCued.current = cued;
+      lastFlush.current = now;
       setLayers(g.layers);
       setDynamics(g.dynamics);
       setGestureHint(g.hint);
-      orchestra?.setFocus(g.focus);
-      orchestra?.setCut(g.cut);
     },
     [ready, setDynamics, setLayers],
   );

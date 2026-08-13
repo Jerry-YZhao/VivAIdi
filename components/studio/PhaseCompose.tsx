@@ -13,7 +13,9 @@ import {
 } from "@/lib/pitch-track";
 import { playMelody } from "@/lib/melody-preview";
 import { composeArrangement } from "@/lib/composer";
+import { EXAMPLES, type ExampleId } from "@/lib/examples";
 import { defaultLayers } from "@/lib/gestures";
+import { prewarmHandTracker } from "@/lib/hand-tracker";
 import { getOrchestraPlayer } from "@/lib/orchestra-player";
 import { ENSEMBLES } from "@/lib/styles";
 import { ProgrammeCaption } from "./Auditorium";
@@ -49,6 +51,7 @@ export function PhaseCompose() {
   const [elapsed, setElapsed] = useState(0);
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [previewing, setPreviewing] = useState(false);
+  const [exampleId, setExampleId] = useState<ExampleId | null>(null);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -94,6 +97,7 @@ export function PhaseCompose() {
     setError(null);
     setStatus(null);
     setTrace([]);
+    setExampleId(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
@@ -188,6 +192,22 @@ export function PhaseCompose() {
     if (track) applyTrack(track, mode);
   };
 
+  const chooseExample = (id: ExampleId) => {
+    const example = EXAMPLES.find((item) => item.id === id);
+    if (!example) return;
+    stopPreviewRef.current?.();
+    stopPreviewRef.current = null;
+    setPreviewing(false);
+    setError(null);
+    setExampleId(id);
+    setHum(null);
+    setTrack(null);
+    setNotes(example.notes);
+    setLiveNote(null);
+    setTrace([]);
+    setStatus(null);
+  };
+
   const togglePreview = () => {
     if (previewing) {
       stopPreviewRef.current?.();
@@ -233,9 +253,12 @@ export function PhaseCompose() {
     }
   };
 
+  // Seat the players and fetch the hand model while the theme is still being
+  // settled, so taking the podium never competes with playback.
   useEffect(() => {
     if (!notes.length || recording || analyzing) return;
     void getOrchestraPlayer().load(style).catch(() => {});
+    prewarmHandTracker();
   }, [analyzing, notes.length, recording, style]);
 
   const hasTheme = notes.length > 0;
@@ -249,7 +272,13 @@ export function PhaseCompose() {
         className="mb-10 text-center"
       >
         <h2 className="font-display text-4xl font-semibold tracking-tight text-ivory md:text-5xl">
-          {recording ? "Listening" : hasTheme ? "Your theme" : "Before you begin"}
+          {recording
+            ? "Listening"
+            : exampleId
+              ? "A known theme"
+              : hasTheme
+                ? "Your theme"
+                : "Before you begin"}
         </h2>
         {!recording && !hasTheme && (
           <p className="hall-signage mt-3 text-xs">
@@ -298,6 +327,36 @@ export function PhaseCompose() {
         )}
       </div>
 
+      {!recording && !analyzing && (
+        <div className="mt-14 w-full text-center">
+          <p className="hall-signage mb-4 text-xs">
+            {hasTheme ? "Known theme" : "Or a known theme"}
+          </p>
+          <div className="flex flex-wrap justify-center gap-x-8 gap-y-2">
+            {EXAMPLES.map((example) => (
+              <button
+                key={example.id}
+                type="button"
+                disabled={busy}
+                onClick={() => chooseExample(example.id)}
+                className={`font-display text-lg font-medium transition disabled:opacity-40 ${
+                  exampleId === example.id
+                    ? "text-brass"
+                    : "text-ivory-muted/50 hover:text-ivory-muted"
+                }`}
+              >
+                {example.label}
+              </button>
+            ))}
+          </div>
+          {exampleId && (
+            <p className="hall-signage mt-4 text-xs normal-case text-ivory-muted/60">
+              {EXAMPLES.find((example) => example.id === exampleId)?.blurb}
+            </p>
+          )}
+        </div>
+      )}
+
       <AnimatePresence>
         {hasTheme && !recording && !analyzing && (
           <motion.div
@@ -330,17 +389,18 @@ export function PhaseCompose() {
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-6 text-xs tracking-widest text-ivory-muted uppercase">
-              {SENSITIVITY_LABELS.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => changeSensitivity(s.id)}
-                  className={sensitivity === s.id ? "text-brass" : "hover:text-ivory"}
-                >
-                  {s.label}
-                </button>
-              ))}
-              <span className="text-ivory/20">·</span>
+              {track &&
+                SENSITIVITY_LABELS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => changeSensitivity(s.id)}
+                    className={sensitivity === s.id ? "text-brass" : "hover:text-ivory"}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              {track && <span className="text-ivory/20">·</span>}
               <button
                 type="button"
                 onClick={togglePreview}

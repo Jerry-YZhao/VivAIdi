@@ -17,6 +17,11 @@ export type ThemeAnalysis = {
   notes: GridNote[];
   /** Two bars of material used as the basic idea of the sentence. */
   basicIdea: GridNote[];
+  /**
+   * Four bars of the hum, ready to open the piece. A four-bar tune is quoted
+   * whole; anything shorter repeats to fill the phrase.
+   */
+  themePhrase: GridNote[];
   /** Median pitch of the hum, used to place the melody in a sensible octave. */
   centerPitch: number;
   /** Onsets per beat — busy hums get lighter accompaniments. */
@@ -26,6 +31,7 @@ export type ThemeAnalysis = {
 
 const BEATS_PER_BAR = 4;
 const IDEA_BEATS = BEATS_PER_BAR * 2;
+const PHRASE_BEATS = BEATS_PER_BAR * 4;
 
 /** Krumhansl-Schmuckler key profiles. */
 const MAJOR_PROFILE = [
@@ -35,7 +41,11 @@ const MINOR_PROFILE = [
   6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
 ];
 
-/** Collapse the transcription into one clean monophonic line. */
+/**
+ * Collapse the transcription into one clean monophonic line. Separate onsets of
+ * the same pitch are kept apart: the segmenter only emits them where it heard a
+ * new attack, and repeated notes carry much of a melody's identity.
+ */
 function monophonic(notes: NoteEvent[]): NoteEvent[] {
   const sorted = [...notes]
     .filter((n) => n.durationSeconds > 0.06 && n.amplitude > 0.05)
@@ -49,12 +59,6 @@ function monophonic(notes: NoteEvent[]): NoteEvent[] {
       continue;
     }
     const lastEnd = last.startTimeSeconds + last.durationSeconds;
-    if (n.pitchMidi === last.pitchMidi && n.startTimeSeconds - lastEnd < 0.08) {
-      last.durationSeconds =
-        n.startTimeSeconds + n.durationSeconds - last.startTimeSeconds;
-      last.amplitude = Math.max(last.amplitude, n.amplitude);
-      continue;
-    }
     if (n.startTimeSeconds < lastEnd) {
       last.durationSeconds = Math.max(
         0.06,
@@ -144,12 +148,11 @@ function quantize(notes: NoteEvent[], qpm: number): GridNote[] {
       continue;
     }
     if (last) {
+      // Distinct onsets stay distinct. Merging touching notes of the same pitch
+      // turned every repeated note into one long one, which is most of what
+      // makes a well-known tune recognisable ("twinkle twinkle" became one C).
       const room = n.startBeat - last.startBeat;
       if (last.durBeats > room) last.durBeats = room;
-      if (last.pitch === n.pitch && last.startBeat + last.durBeats >= n.startBeat) {
-        last.durBeats = n.startBeat + n.durBeats - last.startBeat;
-        continue;
-      }
     }
     out.push(n);
   }
@@ -178,14 +181,48 @@ function tileTo(notes: GridNote[], beats: number): GridNote[] {
   return out;
 }
 
+function clipTo(notes: GridNote[], beats: number): GridNote[] {
+  return notes
+    .filter((n) => n.startBeat < beats - 1e-6)
+    .map((n) => ({ ...n, durBeats: Math.min(n.durBeats, beats - n.startBeat) }));
+}
+
 function makeBasicIdea(notes: GridNote[]): GridNote[] {
-  const within = notes
-    .filter((n) => n.startBeat < IDEA_BEATS)
-    .map((n) => ({ ...n, durBeats: Math.min(n.durBeats, IDEA_BEATS - n.startBeat) }));
+  const within = clipTo(notes, IDEA_BEATS);
   if (!within.length) return [];
   const span = Math.max(...within.map((n) => n.startBeat + n.durBeats));
   if (span >= IDEA_BEATS - 1.5) return within;
   return tileTo(within, IDEA_BEATS);
+}
+
+/**
+ * The opening four bars, quoting as much of the hum as it actually provides.
+ * Repeating a short idea to fill the phrase is what the Classical presentation
+ * does anyway, so both cases land on idiomatic material.
+ */
+function makeThemePhrase(notes: GridNote[]): GridNote[] {
+  const within = clipTo(notes, PHRASE_BEATS);
+  if (!within.length) return [];
+  const span = Math.max(...within.map((n) => n.startBeat + n.durBeats));
+  // Repeat on a whole-bar period so tiling never fights the metre.
+  const period = Math.min(
+    PHRASE_BEATS,
+    Math.max(BEATS_PER_BAR, Math.ceil((span - 0.5) / BEATS_PER_BAR) * BEATS_PER_BAR),
+  );
+  if (period >= PHRASE_BEATS) return within;
+  const out: GridNote[] = [];
+  for (let offset = 0; offset < PHRASE_BEATS; offset += period) {
+    for (const n of within) {
+      const startBeat = offset + n.startBeat;
+      if (startBeat >= PHRASE_BEATS - 1e-6) continue;
+      out.push({
+        ...n,
+        startBeat,
+        durBeats: Math.min(n.durBeats, PHRASE_BEATS - startBeat),
+      });
+    }
+  }
+  return out;
 }
 
 /** A plain diatonic gesture used when the microphone heard nothing usable. */
@@ -218,9 +255,11 @@ export function analyzeTheme(hummed: NoteEvent[]): ThemeAnalysis {
     ? Math.round(median(notes.map((n) => n.pitch)))
     : 67;
 
-  const idea = notes.length
-    ? makeBasicIdea(notes)
+  const sung = notes.length
+    ? notes
     : inventedIdea(key.tonicPc, key.mode, centerPitch);
+  const idea = makeBasicIdea(sung);
+  const themePhrase = makeThemePhrase(sung);
 
   const span = idea.length
     ? Math.max(...idea.map((n) => n.startBeat + n.durBeats))
@@ -232,6 +271,7 @@ export function analyzeTheme(hummed: NoteEvent[]): ThemeAnalysis {
     qpm,
     notes,
     basicIdea: idea,
+    themePhrase,
     centerPitch,
     density: idea.length / Math.max(1, span),
     invented: !notes.length,

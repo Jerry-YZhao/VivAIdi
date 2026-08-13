@@ -161,8 +161,9 @@ export function readConductGesture(
   world: Landmark[],
   extension: number,
   groups: ConductGroupSpec[],
+  /** Callers holding frame history pass a debounced value to reject misreads. */
+  fist = isFist(world),
 ): ConductGesture {
-  const fist = isFist(world);
   const layers = fist ? silentLayers(groups) : layersFromExtension(groups, extension);
   const focus = focusFromHand(image);
   const dynamics = fist ? 0.08 : dynamicsFromHand(image);
@@ -177,6 +178,26 @@ export function readConductGesture(
   }
 
   return { layers, dynamics, focus, cut: fist, hint };
+}
+
+/**
+ * What the ensemble does once the conductor's hands leave the frame. A cut is
+ * released rather than held, so lowering your hands after a fist can never
+ * leave the hall silent for good; whatever was playing carries on at a
+ * moderate level.
+ */
+export function restedGesture(
+  groups: ConductGroupSpec[],
+  layers: LayerState,
+): ConductGesture {
+  const sounding = groups.some((g) => layers[g.id]);
+  return {
+    layers: sounding ? layers : defaultLayers(groups),
+    dynamics: 0.55,
+    focus: 0.5,
+    cut: false,
+    hint: "Hands rested \u2014 raise them to conduct again",
+  };
 }
 
 /** Stable signature used to throttle gesture updates. */

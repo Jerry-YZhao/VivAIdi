@@ -8,16 +8,30 @@ import {
   fingertipPoints,
   gestureSignature,
   handExtension,
+  isFist,
   readConductGesture,
+  restedGesture,
   type Landmark,
 } from "@/lib/gestures";
 import type { ConductGesture } from "@/lib/gestures";
+import {
+  getHandLandmarker,
+  resetHandLandmarker,
+} from "@/lib/hand-tracker";
 import type { ConductGroupSpec } from "@/lib/styles";
 
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
-const WASM_ROOT =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+/** A cut has to be meant — a single misread frame should not stop the music. */
+const FIST_FRAMES = 2;
+/** How long the hands may be out of shot before the ensemble is let off a cut. */
+const REST_AFTER_MS = 700;
+/**
+ * Conducting is a slow gesture, so inference runs well below display rate. This
+ * leaves the main thread free for audio scheduling, which is what actually has
+ * a deadline.
+ */
+const DETECT_INTERVAL_MS = 55;
+/** The overlay is a decorative wash scaled up by CSS; it needs no more than this. */
+const OVERLAY_WIDTH = 960;
 
 export function PodiumCamera({
   groups,
@@ -31,6 +45,10 @@ export function PodiumCamera({
   const rafRef = useRef(0);
   const lastSig = useRef("");
   const smoothExt = useRef(0);
+  const fistFrames = useRef(0);
+  const lastSeen = useRef(0);
+  const rested = useRef(true);
+  const lastLayers = useRef(defaultLayers(groups));
   const onGestureRef = useRef(onGesture);
   const groupsRef = useRef(groups);
 
@@ -45,20 +63,24 @@ export function PodiumCamera({
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let landmarker: any = null;
+    let detectInFlight = false;
+    let lastVideoTimestamp = 0;
+    let recovering = false;
+
+    async function ensureLandmarker() {
+      if (cancelled) return null;
+      landmarker = await getHandLandmarker();
+      return landmarker;
+    }
 
     async function setup() {
       try {
-        const vision = await import("@mediapipe/tasks-vision");
-        const { HandLandmarker, FilesetResolver } = vision;
-        const fileset = await FilesetResolver.forVisionTasks(WASM_ROOT);
-        landmarker = await HandLandmarker.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
-          runningMode: "VIDEO",
-          numHands: 1,
-        });
+        landmarker = await ensureLandmarker();
+        if (!landmarker || cancelled) return;
 
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 1280, height: 720 },
+          // ideal, not exact — many cameras reject a hard 640×480 constraint.
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
           audio: false,
         });
         if (cancelled) {
@@ -70,34 +92,83 @@ export function PodiumCamera({
         video.srcObject = stream;
         await video.play();
 
-        const loop = () => {
-          if (cancelled || !videoRef.current || !landmarker) return;
-          const videoEl = videoRef.current;
-          if (videoEl.readyState >= 2) {
-            const result = landmarker.detectForVideo(
-              videoEl,
-              performance.now(),
-            );
-            const image = result.landmarks?.[0] as Landmark[] | undefined;
-            const world =
-              (result.worldLandmarks?.[0] as Landmark[] | undefined) ?? image;
-            const now = performance.now();
-            const ext = world ? handExtension(world) : 0;
-            smoothExt.current = smoothExt.current * 0.4 + ext * 0.6;
-            draw(image, smoothExt.current, now);
+        let lastDetect = 0;
 
-            if (world && image) {
-              const g = readConductGesture(
-                image,
-                world,
-                smoothExt.current,
-                groupsRef.current,
-              );
-              const sig = gestureSignature(g);
-              if (sig !== lastSig.current) {
-                lastSig.current = sig;
+        const loop = () => {
+          if (cancelled || !videoRef.current) return;
+          const videoEl = videoRef.current;
+          const elapsed = performance.now() - lastDetect;
+          if (
+            landmarker &&
+            videoEl.readyState >= 2 &&
+            elapsed >= DETECT_INTERVAL_MS &&
+            !detectInFlight
+          ) {
+            lastDetect = performance.now();
+            detectInFlight = true;
+            try {
+              const timestamp = Math.max(lastVideoTimestamp + 1, performance.now());
+              lastVideoTimestamp = timestamp;
+              const result = landmarker.detectForVideo(videoEl, timestamp);
+              const image = result.landmarks?.[0] as Landmark[] | undefined;
+              const world =
+                (result.worldLandmarks?.[0] as Landmark[] | undefined) ?? image;
+              const now = performance.now();
+              const ext = world ? handExtension(world) : 0;
+              smoothExt.current = smoothExt.current * 0.4 + ext * 0.6;
+              draw(image, smoothExt.current, now);
+
+              if (world && image) {
+                lastSeen.current = now;
+                rested.current = false;
+                fistFrames.current = isFist(world) ? fistFrames.current + 1 : 0;
+                const g = readConductGesture(
+                  image,
+                  world,
+                  smoothExt.current,
+                  groupsRef.current,
+                  fistFrames.current >= FIST_FRAMES,
+                );
+                if (!g.cut) lastLayers.current = g.layers;
+                const sig = gestureSignature(g);
+                if (sig !== lastSig.current) {
+                  lastSig.current = sig;
+                  onGestureRef.current(g);
+                }
+              } else if (
+                !rested.current &&
+                lastSeen.current > 0 &&
+                now - lastSeen.current > REST_AFTER_MS
+              ) {
+                // Hands out of shot: never leave the ensemble stuck under a cut.
+                rested.current = true;
+                fistFrames.current = 0;
+                const g = restedGesture(groupsRef.current, lastLayers.current);
+                lastSig.current = gestureSignature(g);
                 onGestureRef.current(g);
               }
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              if (message.includes("Aborted") && !recovering) {
+                // A closed singleton was the usual cause — reload once and keep going.
+                recovering = true;
+                resetHandLandmarker();
+                landmarker = null;
+                lastVideoTimestamp = 0;
+                void ensureLandmarker()
+                  .then((lm) => {
+                    recovering = false;
+                    if (!cancelled) landmarker = lm;
+                  })
+                  .catch((reloadErr) => {
+                    recovering = false;
+                    console.error(reloadErr);
+                  });
+              } else if (!message.includes("Aborted")) {
+                console.error(err);
+              }
+            } finally {
+              detectInFlight = false;
             }
           }
           rafRef.current = requestAnimationFrame(loop);
@@ -123,8 +194,15 @@ export function PodiumCamera({
       const canvas = canvasRef.current;
       const video = videoRef.current;
       if (!canvas || !video) return;
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
+      // Resizing a canvas clears and reallocates it, so only do so when the
+      // camera's aspect actually changes.
+      const height = Math.round(
+        OVERLAY_WIDTH / (video.videoWidth / video.videoHeight || 4 / 3),
+      );
+      if (canvas.width !== OVERLAY_WIDTH || canvas.height !== height) {
+        canvas.width = OVERLAY_WIDTH;
+        canvas.height = height;
+      }
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -138,7 +216,8 @@ export function PodiumCamera({
       cancelled = true;
       cancelAnimationFrame(rafRef.current);
       stream?.getTracks().forEach((t) => t.stop());
-      landmarker?.close?.();
+      // The landmarker is a session-wide singleton — closing it here left the
+      // cached instance in an Aborted state on the next mount.
     };
   }, []);
 
