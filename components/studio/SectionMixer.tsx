@@ -27,7 +27,7 @@ export function SectionMixer({
             title={group.label}
           >
             <div
-              className="w-8 transition-all duration-500 md:w-10"
+              className="w-8 transition-all duration-700 ease-in-out md:w-10"
               style={{
                 height: on ? "3.5rem" : "1rem",
                 background: on
@@ -37,7 +37,7 @@ export function SectionMixer({
               }}
             />
             <span
-              className={`font-display text-xs font-medium transition ${
+              className={`font-display text-xs font-medium transition-colors duration-700 ${
                 on ? "text-brass" : "text-ivory-muted/40"
               }`}
             >

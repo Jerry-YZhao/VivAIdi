@@ -67,7 +67,10 @@ export function PhaseConduct() {
       if (!orchestra.isPlaying()) {
         await orchestra.play(arrangement, true);
       }
-      if (cancelled) return;
+      if (cancelled) {
+        orchestra.stop();
+        return;
+      }
       setPlaying(true);
       setReady(true);
       setStatus(null);
@@ -83,6 +86,7 @@ export function PhaseConduct() {
 
     return () => {
       cancelled = true;
+      orchestra.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrangement]);
@@ -130,7 +134,7 @@ export function PhaseConduct() {
   };
 
   const leaveHall = () => {
-    orchestraRef.current?.stop();
+    getOrchestraPlayer().stop();
     setArrangement(null);
     setLayers(defaultLayers(styleById(style).groups));
     setPhase("compose");

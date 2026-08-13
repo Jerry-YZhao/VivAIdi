@@ -47,6 +47,27 @@ export type OrchestraPlayer = {
 };
 
 const SILENT = 0.0001;
+/** How long a section takes to leave or rejoin — long enough to hear the blend. */
+const LAYER_FADE_SECONDS = 0.72;
+
+/**
+ * Hold the current computed gain, then glide. cancelScheduledValues alone can
+ * snap to the previous target in some browsers, which is why mute felt instant.
+ */
+function fadeParam(param: AudioParam, target: number, now: number, seconds: number) {
+  const value = Math.max(SILENT, target);
+  if (typeof param.cancelAndHoldAtTime === "function") {
+    param.cancelAndHoldAtTime(now);
+  } else {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(Math.max(SILENT, param.value), now);
+  }
+  if (seconds <= 0.001) {
+    param.setValueAtTime(value, now);
+    return;
+  }
+  param.linearRampToValueAtTime(value, now + seconds);
+}
 
 /**
  * The conduct phase runs a hand-landmark model alongside playback, which stalls
@@ -132,6 +153,8 @@ function createOrchestraPlayer(): OrchestraPlayer {
   let loadTask: Promise<void> | null = null;
   let watchdog = 0;
   let playing = false;
+  /** Bumped on stop so an in-flight play() cannot restart after leaving. */
+  let runId = 0;
   let cut = false;
   let layers: LayerState = {};
   /** Remembered so releasing a cut can restore the level on its own. */
@@ -208,20 +231,21 @@ function createOrchestraPlayer(): OrchestraPlayer {
     layers = Object.fromEntries(style.groups.map((g) => [g.id, g.cue === 0]));
   }
 
-  function applyLayers(now = ctx.currentTime, tau = 0.18) {
+  function applyLayers(now = ctx.currentTime, seconds = LAYER_FADE_SECONDS) {
     for (const [id, bus] of groups) {
       const target = cut ? SILENT : layers[id] ? 1 : SILENT;
-      for (const node of [bus.layer, bus.send]) {
-        node.gain.cancelScheduledValues(now);
-        node.gain.setTargetAtTime(target, now, tau);
-      }
+      fadeParam(bus.layer.gain, target, now, seconds);
+      fadeParam(bus.send.gain, target, now, seconds);
     }
   }
 
-  function applyDynamics(tau = 0.1) {
-    const now = ctx.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setTargetAtTime(cut ? SILENT : dynamics * 0.9, now, tau);
+  function applyDynamics(seconds = 0.22) {
+    fadeParam(
+      master.gain,
+      cut ? SILENT : dynamics * 0.9,
+      ctx.currentTime,
+      seconds,
+    );
   }
 
   function clearVoices() {
@@ -231,13 +255,21 @@ function createOrchestraPlayer(): OrchestraPlayer {
     current = null;
     timeline = [];
     cursor = 0;
+    const now = ctx.currentTime;
     while (active.length) {
       try {
-        active.pop()?.voice.stop(0);
+        // Time 0 is the start of the context — in the past — so those stops
+        // throw and the already-scheduled look-ahead keeps playing.
+        active.pop()?.voice.stop(now);
       } catch {
         /* already stopped */
       }
     }
+  }
+
+  function silenceNow() {
+    fadeParam(master.gain, SILENT, ctx.currentTime, 0.04);
+    fadeParam(wetGain.gain, SILENT, ctx.currentTime, 0.04);
   }
 
   /** Drop finished voices so a long performance does not accumulate them. */
@@ -434,13 +466,17 @@ function createOrchestraPlayer(): OrchestraPlayer {
       await new Promise((r) => window.setTimeout(r, 120));
     },
     async play(arrangement, loop = true) {
+      const mine = runId;
       clearVoices();
       await ensureRunning();
+      if (mine !== runId) return;
       const style = styleById(arrangement.style);
       if (loadedStyle !== arrangement.style || !allLoaded(style)) {
         throw new Error("Instruments are not ready yet.");
       }
-      applyLayers(ctx.currentTime, 0.05);
+      fadeParam(wetGain.gain, style.wetMix, ctx.currentTime, 0.08);
+      applyLayers(ctx.currentTime, 0.08);
+      applyDynamics(0.08);
       current = arrangement;
       timeline = buildTimeline(arrangement);
       cursor = 0;
@@ -451,12 +487,15 @@ function createOrchestraPlayer(): OrchestraPlayer {
       startWatchdog();
     },
     stop() {
-      clearVoices();
+      runId += 1;
       playing = false;
+      cut = false;
+      clearVoices();
+      silenceNow();
     },
     setLayers(next) {
       layers = { ...layers, ...next };
-      applyLayers(ctx.currentTime, 0.2);
+      applyLayers();
     },
     setDynamics(value) {
       dynamics = Math.min(1, Math.max(0.08, value));
@@ -469,16 +508,15 @@ function createOrchestraPlayer(): OrchestraPlayer {
       const now = ctx.currentTime;
       for (const bus of groups.values()) {
         const emphasis = Math.min(1.5, Math.max(0.6, 1 + bias * bus.pan * 0.55));
-        bus.focus.gain.cancelScheduledValues(now);
-        bus.focus.gain.setTargetAtTime(emphasis, now, 0.14);
+        fadeParam(bus.focus.gain, emphasis, now, 0.28);
       }
     },
     setCut(next) {
       cut = next;
-      applyLayers(ctx.currentTime, next ? 0.04 : 0.16);
+      applyLayers(ctx.currentTime, next ? 0.08 : 0.28);
       // Restoring the level here means a released cut always sounds again, even
       // if no dynamic gesture follows it.
-      applyDynamics(next ? 0.04 : 0.16);
+      applyDynamics(next ? 0.08 : 0.28);
     },
     dispose() {
       clearVoices();
