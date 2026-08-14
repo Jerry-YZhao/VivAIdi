@@ -24,6 +24,13 @@ const VIOLIN2: VoiceRange = { min: 55, max: 81 };
 const VIOLIN1: VoiceRange = { min: 62, max: 88 };
 
 /**
+ * The leader's full compass. Wider than the voicing window above: a chorale
+ * soprano is kept tight for blend, but a solo line has the whole instrument,
+ * and a wide theme needs the room or its peak gets clipped.
+ */
+const VIOLIN1_SOLO: VoiceRange = { min: 55, max: 91 };
+
+/**
  * Four independent players rather than a melody with padding. Roles rotate:
  * the cello takes the theme at the return, the upper voices answer each other
  * in the continuation, and only the cadence is homorhythmic.
@@ -34,7 +41,7 @@ export function arrangeQuartet(ctx: ArrangeContext): ArrangementPart[] {
   const tenor = voiceLine(ctx.slots, voiced, 1);
   const alto = voiceLine(ctx.slots, voiced, 2);
   const soprano = voiceLine(ctx.slots, voiced, 3);
-  const lead = fitLineToRange(ctx.lead, VIOLIN1.min, VIOLIN1.max);
+  const lead = fitLineToRange(ctx.lead, VIOLIN1_SOLO.min, VIOLIN1_SOLO.max);
 
   const violin1: GridNote[] = [];
   const violin2: GridNote[] = [];

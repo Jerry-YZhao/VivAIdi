@@ -31,9 +31,10 @@ function clampToLoop(parts: ArrangementPart[], loopSeconds: number): Arrangement
 export function composeArrangement(
   hummed: NoteEvent[],
   styleId: StyleId,
+  options?: { qpm?: number; gridQpm?: number },
 ): Arrangement {
   const style = styleById(styleId);
-  const ctx: ArrangeContext = buildContext(hummed, style);
+  const ctx: ArrangeContext = buildContext(hummed, style, options);
   const loopSeconds = BARS * BEATS_PER_BAR * ctx.spb;
   const parts = clampToLoop(ARRANGERS[style.id](ctx), loopSeconds).filter(
     (part) => part.notes.length > 0,

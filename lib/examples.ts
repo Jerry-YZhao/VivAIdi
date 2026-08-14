@@ -70,23 +70,32 @@ const ode = theme(
 );
 
 /**
- * The love theme from the Butterfly Lovers' violin concerto — 梁祝 —
- * G-pentatonic, starting on E as the yu-mode reciting tone.
+ * 梁祝 — bars 7-8 of the love theme, where the line finally soars. Read from
+ * the numbered score in G (1 = G, 4/4): a right-hand dot adds half the value,
+ * one underline halves it, two underlines halve it again, and dots above a
+ * numeral lift it by an octave each.
+ *
+ *   | 3  5· 6  1· 2  6 1 5 | 5· 1̈  6 5 3 5  2 — |
  */
 const liangzhu = theme(
   [
-    [64, 1.5],
-    [62, 0.5],
-    [64, 1],
-    [67, 1],
-    [69, 1.5],
-    [67, 0.5],
-    [64, 1],
-    [62, 1],
-    [64, 2],
-    [62, 1],
+    // Bar 7, low register: B D E G A, then back down to D.
     [59, 1],
-    [62, 4],
+    [62, 0.75],
+    [64, 0.25],
+    [67, 0.75],
+    [69, 0.25],
+    [64, 0.25],
+    [67, 0.25],
+    [62, 0.5],
+    // Bar 8 leaps the octave — D5 up to G5, then the descent to a held A.
+    [74, 0.75],
+    [79, 0.25],
+    [76, 0.25],
+    [74, 0.25],
+    [71, 0.25],
+    [74, 0.25],
+    [69, 2],
   ],
   66,
 );
@@ -107,7 +116,7 @@ export const EXAMPLES: ExampleTheme[] = [
   {
     id: "liangzhu",
     label: "Liang Zhu",
-    blurb: "The Butterfly Lovers' love theme",
+    blurb: "The Butterfly Lovers' theme, where it soars",
     notes: liangzhu,
   },
 ];

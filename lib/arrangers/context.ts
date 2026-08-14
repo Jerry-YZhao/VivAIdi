@@ -29,8 +29,9 @@ export type ArrangeContext = {
 export function buildContext(
   hummed: NoteEvent[],
   style: EnsembleStyle,
+  options?: { qpm?: number; gridQpm?: number },
 ): ArrangeContext {
-  const analysis = analyzeTheme(hummed);
+  const analysis = analyzeTheme(hummed, options);
   const slots = buildFormSlots();
   const draft = draftLead(analysis);
   const chords = planHarmony(analysis.tonicPc, analysis.mode, slots, draft);

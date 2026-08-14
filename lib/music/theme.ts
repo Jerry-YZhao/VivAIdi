@@ -245,12 +245,16 @@ function inventedIdea(tonicPc: number, mode: Mode, center: number): GridNote[] {
   return out;
 }
 
-export function analyzeTheme(hummed: NoteEvent[]): ThemeAnalysis {
+export function analyzeTheme(
+  hummed: NoteEvent[],
+  options?: { qpm?: number; gridQpm?: number },
+): ThemeAnalysis {
   const mono = monophonic(hummed);
   const usable = mono.length >= 2;
-  const qpm = estimateQpm(mono);
+  const gridQpm = options?.gridQpm ?? estimateQpm(mono);
+  const qpm = options?.qpm ?? gridQpm;
   const key = usable ? detectKey(mono) : { tonicPc: 0, mode: "major" as Mode };
-  const notes = usable ? quantize(mono, qpm) : [];
+  const notes = usable ? quantize(mono, gridQpm) : [];
   const centerPitch = notes.length
     ? Math.round(median(notes.map((n) => n.pitch)))
     : 67;

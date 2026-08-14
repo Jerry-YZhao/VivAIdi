@@ -28,6 +28,10 @@ const VIOLA: VoiceRange = { min: 48, max: 74 };
 const INNER: VoiceRange = { min: 55, max: 79 };
 const VIOLIN: VoiceRange = { min: 62, max: 88 };
 
+/** The section's full compass, kept wider than the voicing window so a
+ *  wide-ranging theme keeps its peak instead of being clamped flat. */
+const VIOLIN_SOLO: VoiceRange = { min: 55, max: 91 };
+
 const WIND_BREATH = [4, 8, 12].map((bar) => bar * BEATS_PER_BAR);
 
 /** A measured roll, swelling from one dynamic to another. */
@@ -101,7 +105,7 @@ export function arrangeOrchestra(ctx: ArrangeContext): ArrangementPart[] {
   const bassLine = voiceLine(ctx.slots, voiced, 0);
   const tenorLine = voiceLine(ctx.slots, voiced, 1);
   const innerLine = voiceLine(ctx.slots, voiced, 2);
-  const lead = fitLineToRange(ctx.lead, VIOLIN.min, VIOLIN.max);
+  const lead = fitLineToRange(ctx.lead, VIOLIN_SOLO.min, VIOLIN_SOLO.max);
 
   const violins: GridNote[] = [];
   const violinsTremolo: GridNote[] = [];

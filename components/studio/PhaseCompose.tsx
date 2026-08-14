@@ -16,10 +16,16 @@ import { composeArrangement } from "@/lib/composer";
 import { EXAMPLES, type ExampleId } from "@/lib/examples";
 import { defaultLayers } from "@/lib/gestures";
 import { prewarmHandTracker } from "@/lib/hand-tracker";
+import { estimateQpm } from "@/lib/music/theme";
+import {
+  A_TEMPO_INDEX,
+  markedQpm,
+} from "@/lib/music/tempo";
 import { getOrchestraPlayer } from "@/lib/orchestra-player";
 import { ENSEMBLES } from "@/lib/styles";
 import { ProgrammeCaption } from "./Auditorium";
 import { ScoreRibbon, type TracePoint } from "./ScoreRibbon";
+import { ThemeMetronome } from "./ThemeMetronome";
 
 const MAX_TRACE = 400;
 
@@ -52,6 +58,9 @@ export function PhaseCompose() {
   const [trace, setTrace] = useState<TracePoint[]>([]);
   const [previewing, setPreviewing] = useState(false);
   const [exampleId, setExampleId] = useState<ExampleId | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [originalQpm, setOriginalQpm] = useState(96);
+  const [tempoIndex, setTempoIndex] = useState(A_TEMPO_INDEX);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -84,6 +93,9 @@ export function PhaseCompose() {
     (pitchTrack: PitchTrack, mode: Sensitivity) => {
       const melody = interpretTrack(pitchTrack, mode);
       setNotes(melody.notes);
+      setSelectedIndex(null);
+      setOriginalQpm(estimateQpm(melody.notes));
+      setTempoIndex(A_TEMPO_INDEX);
       setStatus(
         melody.notes.length
           ? `${melody.notes.length} tones captured`
@@ -98,6 +110,7 @@ export function PhaseCompose() {
     setStatus(null);
     setTrace([]);
     setExampleId(null);
+    setSelectedIndex(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
@@ -203,6 +216,9 @@ export function PhaseCompose() {
     setHum(null);
     setTrack(null);
     setNotes(example.notes);
+    setSelectedIndex(null);
+    setOriginalQpm(estimateQpm(example.notes));
+    setTempoIndex(A_TEMPO_INDEX);
     setLiveNote(null);
     setTrace([]);
     setStatus(null);
@@ -216,10 +232,15 @@ export function PhaseCompose() {
       return;
     }
     setPreviewing(true);
-    stopPreviewRef.current = playMelody(notes, () => {
-      stopPreviewRef.current = null;
-      setPreviewing(false);
-    });
+    const chosen = markedQpm(originalQpm, tempoIndex);
+    stopPreviewRef.current = playMelody(
+      notes,
+      () => {
+        stopPreviewRef.current = null;
+        setPreviewing(false);
+      },
+      { rate: originalQpm / chosen },
+    );
   };
 
   const takePodium = async () => {
@@ -229,7 +250,10 @@ export function PhaseCompose() {
     setGenerating(true);
     try {
       setStatus("The musicians are studying your theme…");
-      const arrangement = composeArrangement(notes, style);
+      const arrangement = composeArrangement(notes, style, {
+        gridQpm: originalQpm,
+        qpm: markedQpm(originalQpm, tempoIndex),
+      });
       setArrangement(arrangement);
 
       const orchestra = getOrchestraPlayer();
@@ -292,7 +316,47 @@ export function PhaseCompose() {
         liveNote={liveNote}
         recording={recording}
         trace={trace}
+        editable={hasTheme && !recording && !analyzing}
+        selectedIndex={selectedIndex}
+        onSelect={(index) => {
+          setSelectedIndex(index);
+          if (index === null || !notes[index]) {
+            setLiveNote(null);
+            return;
+          }
+          const { name, octave } = noteLabel(notes[index].pitchMidi);
+          setLiveNote(`${name}${octave}`);
+        }}
+        onChange={(next) => {
+          stopPreviewRef.current?.();
+          stopPreviewRef.current = null;
+          setPreviewing(false);
+          setNotes(next);
+          const current = selectedIndex !== null ? next[selectedIndex] : null;
+          if (current) {
+            const { name, octave } = noteLabel(current.pitchMidi);
+            setLiveNote(`${name}${octave}`);
+          }
+        }}
+        preview={
+          hasTheme && !recording && !analyzing
+            ? { playing: previewing, onToggle: togglePreview }
+            : undefined
+        }
       />
+
+      {hasTheme && !recording && !analyzing && (
+        <ThemeMetronome
+          originalQpm={originalQpm}
+          index={tempoIndex}
+          onIndex={(next) => {
+            stopPreviewRef.current?.();
+            stopPreviewRef.current = null;
+            setPreviewing(false);
+            setTempoIndex(next);
+          }}
+        />
+      )}
 
       <div className="mt-10 flex flex-col items-center gap-6">
         {!recording ? (
@@ -400,14 +464,6 @@ export function PhaseCompose() {
                     {s.label}
                   </button>
                 ))}
-              {track && <span className="text-ivory/20">·</span>}
-              <button
-                type="button"
-                onClick={togglePreview}
-                className="hover:text-ivory"
-              >
-                {previewing ? "Silence" : "Hear theme"}
-              </button>
             </div>
 
             <div className="flex justify-center pt-4">

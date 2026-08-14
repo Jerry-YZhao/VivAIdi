@@ -192,7 +192,11 @@ export function PhaseConduct() {
           <SectionMixer
             groups={arrangement.groups}
             layers={layers}
-            onToggle={(id) => setLayers({ ...layers, [id]: !layers[id] })}
+            onToggle={(id) => {
+              const next = { ...layers, [id]: !layers[id] };
+              orchestraRef.current?.setLayers(next);
+              setLayers(next);
+            }}
           />
 
           <div className="mt-5 flex items-center justify-center gap-8">

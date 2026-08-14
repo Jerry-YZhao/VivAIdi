@@ -47,26 +47,42 @@ export type OrchestraPlayer = {
 };
 
 const SILENT = 0.0001;
-/** How long a section takes to leave or rejoin — long enough to hear the blend. */
-const LAYER_FADE_SECONDS = 0.72;
+/** How long a section takes to settle after joining or leaving. */
+const LAYER_FADE_SECONDS = 0.9;
+/** Conductor dynamics — an ensemble answers the beat, not the frame. */
+const DYNAMICS_FADE_SECONDS = 0.55;
+const FOCUS_FADE_SECONDS = 0.45;
+const CUT_FADE_SECONDS = 0.18;
+const CUT_RELEASE_SECONDS = 0.5;
 
 /**
- * Hold the current computed gain, then glide. cancelScheduledValues alone can
- * snap to the previous target in some browsers, which is why mute felt instant.
+ * Glide a gain from wherever it is now. Two things made mutes and dynamics
+ * dip the whole mix:
+ *
+ * 1. Chrome starts a ramp at 0 after cancelAndHoldAtTime unless the current
+ *    value is pinned with setValueAtTime first.
+ * 2. linearRamp on amplitude spends most of its time inaudible, then lurches.
+ *
+ * setTargetAtTime approaches exponentially, which is how a real ensemble
+ * enters, leaves, and answers a conductor.
  */
 function fadeParam(param: AudioParam, target: number, now: number, seconds: number) {
-  const value = Math.max(SILENT, target);
+  const dest = Math.max(SILENT, target);
   if (typeof param.cancelAndHoldAtTime === "function") {
     param.cancelAndHoldAtTime(now);
   } else {
     param.cancelScheduledValues(now);
-    param.setValueAtTime(Math.max(SILENT, param.value), now);
   }
-  if (seconds <= 0.001) {
-    param.setValueAtTime(value, now);
+  // Pin the curve's start. Without this, Chrome's next automation event
+  // treats the held value as 0 and the sounding sections duck.
+  const start = Math.max(SILENT, param.value);
+  param.setValueAtTime(start, now);
+  if (seconds <= 0.001 || Math.abs(start - dest) < 1e-4) {
+    param.setValueAtTime(dest, now);
     return;
   }
-  param.linearRampToValueAtTime(value, now + seconds);
+  // ~95% of the way in `seconds`.
+  param.setTargetAtTime(dest, now + 0.005, Math.max(0.02, seconds / 3));
 }
 
 /**
@@ -127,11 +143,13 @@ function createOrchestraPlayer(): OrchestraPlayer {
   const ctx = new AudioContext();
 
   const compressor = ctx.createDynamicsCompressor();
-  compressor.threshold.value = -17;
-  compressor.knee.value = 14;
-  compressor.ratio.value = 2.2;
-  compressor.attack.value = 0.014;
-  compressor.release.value = 0.24;
+  // Glue, not a limiter: a snappy compressor ducked the whole mix whenever a
+  // section joined, which felt like the ensemble lost its place.
+  compressor.threshold.value = -10;
+  compressor.knee.value = 18;
+  compressor.ratio.value = 1.6;
+  compressor.attack.value = 0.06;
+  compressor.release.value = 0.48;
   compressor.connect(ctx.destination);
 
   const master = ctx.createGain();
@@ -157,6 +175,10 @@ function createOrchestraPlayer(): OrchestraPlayer {
   let runId = 0;
   let cut = false;
   let layers: LayerState = {};
+  /** Last gain each group bus was asked to reach — skip retriggering it. */
+  const layerGoal = new Map<string, number>();
+  const focusGoal = new Map<string, number>();
+  let dynamicsGoal = -1;
   /** Remembered so releasing a cut can restore the level on its own. */
   let dynamics = 0.62;
   let current: Arrangement | null = null;
@@ -179,6 +201,9 @@ function createOrchestraPlayer(): OrchestraPlayer {
     groups.clear();
     partBuses.clear();
     instruments.clear();
+    layerGoal.clear();
+    focusGoal.clear();
+    dynamicsGoal = -1;
   }
 
   function buildGraph(style: EnsembleStyle) {
@@ -234,18 +259,20 @@ function createOrchestraPlayer(): OrchestraPlayer {
   function applyLayers(now = ctx.currentTime, seconds = LAYER_FADE_SECONDS) {
     for (const [id, bus] of groups) {
       const target = cut ? SILENT : layers[id] ? 1 : SILENT;
+      // Retriggering a bus that is already there restarts its automation, and
+      // that was ducking every sounding section when one neighbour joined.
+      if (layerGoal.get(id) === target) continue;
+      layerGoal.set(id, target);
       fadeParam(bus.layer.gain, target, now, seconds);
       fadeParam(bus.send.gain, target, now, seconds);
     }
   }
 
-  function applyDynamics(seconds = 0.22) {
-    fadeParam(
-      master.gain,
-      cut ? SILENT : dynamics * 0.9,
-      ctx.currentTime,
-      seconds,
-    );
+  function applyDynamics(seconds = DYNAMICS_FADE_SECONDS) {
+    const target = cut ? SILENT : dynamics * 0.9;
+    if (Math.abs(target - dynamicsGoal) < 1e-4) return;
+    dynamicsGoal = target;
+    fadeParam(master.gain, target, ctx.currentTime, seconds);
   }
 
   function clearVoices() {
@@ -268,6 +295,7 @@ function createOrchestraPlayer(): OrchestraPlayer {
   }
 
   function silenceNow() {
+    dynamicsGoal = SILENT;
     fadeParam(master.gain, SILENT, ctx.currentTime, 0.04);
     fadeParam(wetGain.gain, SILENT, ctx.currentTime, 0.04);
   }
@@ -475,6 +503,8 @@ function createOrchestraPlayer(): OrchestraPlayer {
         throw new Error("Instruments are not ready yet.");
       }
       fadeParam(wetGain.gain, style.wetMix, ctx.currentTime, 0.08);
+      layerGoal.clear();
+      dynamicsGoal = -1;
       applyLayers(ctx.currentTime, 0.08);
       applyDynamics(0.08);
       current = arrangement;
@@ -494,11 +524,15 @@ function createOrchestraPlayer(): OrchestraPlayer {
       silenceNow();
     },
     setLayers(next) {
-      layers = { ...layers, ...next };
-      applyLayers();
+      const merged = { ...layers, ...next };
+      const changed = Object.keys(merged).some((id) => merged[id] !== layers[id]);
+      layers = merged;
+      if (changed) applyLayers();
     },
     setDynamics(value) {
-      dynamics = Math.min(1, Math.max(0.08, value));
+      const next = Math.min(1, Math.max(0.08, value));
+      if (Math.abs(next - dynamics) < 0.008) return;
+      dynamics = next;
       applyDynamics();
     },
     setFocus(handX) {
@@ -506,17 +540,21 @@ function createOrchestraPlayer(): OrchestraPlayer {
       // sliding the whole ensemble's stereo image.
       const bias = (Math.min(1, Math.max(0, handX)) - 0.5) * 2;
       const now = ctx.currentTime;
-      for (const bus of groups.values()) {
+      for (const [id, bus] of groups) {
         const emphasis = Math.min(1.5, Math.max(0.6, 1 + bias * bus.pan * 0.55));
-        fadeParam(bus.focus.gain, emphasis, now, 0.28);
+        if (Math.abs((focusGoal.get(id) ?? -1) - emphasis) < 0.02) continue;
+        focusGoal.set(id, emphasis);
+        fadeParam(bus.focus.gain, emphasis, now, FOCUS_FADE_SECONDS);
       }
     },
     setCut(next) {
+      if (cut === next) return;
       cut = next;
-      applyLayers(ctx.currentTime, next ? 0.08 : 0.28);
-      // Restoring the level here means a released cut always sounds again, even
-      // if no dynamic gesture follows it.
-      applyDynamics(next ? 0.08 : 0.28);
+      // Targets changed (cut silences every bus), so forget the old goals.
+      layerGoal.clear();
+      dynamicsGoal = -1;
+      applyLayers(ctx.currentTime, next ? CUT_FADE_SECONDS : CUT_RELEASE_SECONDS);
+      applyDynamics(next ? CUT_FADE_SECONDS : CUT_RELEASE_SECONDS);
     },
     dispose() {
       clearVoices();

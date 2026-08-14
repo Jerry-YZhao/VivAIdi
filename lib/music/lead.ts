@@ -247,7 +247,12 @@ export function structuralSoprano(
   });
 }
 
-/** Shift a whole line by octaves so it sits inside an instrument's range. */
+/**
+ * Shift a whole line by octaves so it sits inside an instrument's range.
+ * Notes that still fall outside are clamped, which flattens the contour, so
+ * overflow is priced far above the mild preference for the middle of the
+ * range: an octave that fits wins over one that merely sits more centrally.
+ */
 export function fitLineToRange(
   notes: GridNote[],
   min: number,
@@ -260,8 +265,8 @@ export function fitLineToRange(
     let cost = 0;
     for (const n of notes) {
       const p = n.pitch + octave * 12;
-      if (p < min) cost += (min - p) * 2;
-      else if (p > max) cost += (p - max) * 2;
+      if (p < min) cost += (min - p) * 12;
+      else if (p > max) cost += (p - max) * 12;
       // Prefer the middle of the range.
       cost += Math.abs(p - (min + max) / 2) * 0.05;
     }

@@ -78,9 +78,14 @@ function intoBassoon(notes: NoteEvent[]): NoteEvent[] {
 }
 
 /** Play the transcribed melody back so the singer can confirm it. */
-export function playMelody(notes: NoteEvent[], onEnd?: () => void): () => void {
+export function playMelody(
+  notes: NoteEvent[],
+  onEnd?: () => void,
+  options?: { rate?: number },
+): () => void {
   if (!notes.length) return () => {};
 
+  const rate = options?.rate && options.rate > 0 ? options.rate : 1;
   const ctx = getContext();
   const sounding = intoBassoon(notes);
   const voices: NonNullable<Voice>[] = [];
@@ -102,8 +107,8 @@ export function playMelody(notes: NoteEvent[], onEnd?: () => void): () => void {
       const start = ctx.currentTime + 0.06;
       let last = start;
       for (const note of sounding) {
-        const when = start + note.startTimeSeconds;
-        const duration = Math.max(0.12, note.durationSeconds);
+        const when = start + note.startTimeSeconds * rate;
+        const duration = Math.max(0.12, note.durationSeconds * rate);
         const voice = instrument.play(note.pitchMidi, when, {
           duration,
           gain: Math.min(1, Math.max(0.12, note.amplitude) * 0.85),
