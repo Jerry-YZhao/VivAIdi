@@ -1,5 +1,5 @@
 import type { Arrangement } from "./arrangement";
-import { midiToName } from "./music/theory";
+import { midiToSoundfontNames } from "./music/theory";
 import { styleById, type EnsembleStyle, type PartSpec } from "./styles";
 import type { LayerState, NoteEvent, StyleId } from "./types";
 
@@ -90,6 +90,7 @@ function fadeParam(param: AudioParam, target: number, now: number, seconds: numb
  * the main thread in bursts. Audio is therefore scheduled well ahead of the
  * clock and topped up often, so a late timer costs nothing audible.
  */
+const PERFORMANCE_START_DELAY = 0.35;
 const LOOKAHEAD_SECONDS = 2.5;
 const WATCHDOG_MS = 200;
 /**
@@ -117,7 +118,7 @@ function makeHallImpulse(ctx: AudioContext, seconds: number) {
 function rangeNoteNames(range: [number, number]): string[] {
   const names: string[] = [];
   for (let midi = Math.max(21, range[0] - 2); midi <= Math.min(108, range[1] + 2); midi++) {
-    names.push(midiToName(midi));
+    names.push(...midiToSoundfontNames(midi));
   }
   return names;
 }
@@ -510,7 +511,7 @@ function createOrchestraPlayer(): OrchestraPlayer {
       current = arrangement;
       timeline = buildTimeline(arrangement);
       cursor = 0;
-      passStart = ctx.currentTime + 0.35;
+      passStart = ctx.currentTime + PERFORMANCE_START_DELAY;
       looping = loop;
       playing = true;
       pump();

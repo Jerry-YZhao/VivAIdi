@@ -11,7 +11,7 @@ import {
 import type { Arrangement } from "./arrangement";
 import { defaultLayers } from "./gestures";
 import { disposeOrchestraPlayer } from "./orchestra-player";
-import type { PitchTrack, Sensitivity } from "./pitch-track";
+import type { PitchTrack } from "./pitch-track";
 import { styleById } from "./styles";
 import type { LayerState, NoteEvent, Phase, StyleId } from "./types";
 
@@ -19,7 +19,6 @@ type StudioState = {
   phase: Phase;
   humBlob: Blob | null;
   track: PitchTrack | null;
-  sensitivity: Sensitivity;
   notes: NoteEvent[];
   liveNote: string | null;
   style: StyleId;
@@ -34,7 +33,6 @@ type StudioApi = StudioState & {
   setPhase: (p: Phase) => void;
   setHum: (blob: Blob | null) => void;
   setTrack: (track: PitchTrack | null) => void;
-  setSensitivity: (s: Sensitivity) => void;
   setNotes: (notes: NoteEvent[]) => void;
   setLiveNote: (note: string | null) => void;
   setStyle: (style: StyleId) => void;
@@ -54,7 +52,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>("compose");
   const [humBlob, setHum] = useState<Blob | null>(null);
   const [track, setTrack] = useState<PitchTrack | null>(null);
-  const [sensitivity, setSensitivity] = useState<Sensitivity>("balanced");
   const [notes, setNotes] = useState<NoteEvent[]>([]);
   const [liveNote, setLiveNote] = useState<string | null>(null);
   const [style, setStyleId] = useState<StyleId>(INITIAL_STYLE);
@@ -92,7 +89,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       phase,
       humBlob,
       track,
-      sensitivity,
       notes,
       liveNote,
       style,
@@ -104,7 +100,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       setPhase,
       setHum,
       setTrack,
-      setSensitivity,
       setNotes,
       setLiveNote,
       setStyle,
@@ -119,7 +114,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       phase,
       humBlob,
       track,
-      sensitivity,
       notes,
       liveNote,
       style,

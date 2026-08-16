@@ -29,7 +29,7 @@ export function StudioShell() {
           <button
             type="button"
             onClick={resetPiece}
-            className="hall-signage text-xs transition hover:text-ivory"
+            className="border border-brass/45 px-4 py-1.5 font-display text-sm font-medium text-brass transition hover:border-brass hover:bg-brass/10 hover:shadow-[0_0_18px_rgba(232,165,72,0.18)]"
           >
             New session
           </button>

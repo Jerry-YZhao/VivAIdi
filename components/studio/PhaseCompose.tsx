@@ -6,11 +6,7 @@ import { useStudio } from "@/lib/session";
 import { autoCorrelate, noteFromPitch, noteLabel } from "@/lib/pitch";
 import { analyzeHum, blobToAudioBuffer } from "@/lib/basic-pitch";
 import { interpretTrack } from "@/lib/melody";
-import {
-  SENSITIVITY_LABELS,
-  type PitchTrack,
-  type Sensitivity,
-} from "@/lib/pitch-track";
+import { type PitchTrack } from "@/lib/pitch-track";
 import { playMelody } from "@/lib/melody-preview";
 import { composeArrangement } from "@/lib/composer";
 import { EXAMPLES, type ExampleId } from "@/lib/examples";
@@ -29,13 +25,29 @@ import { ThemeMetronome } from "./ThemeMetronome";
 
 const MAX_TRACE = 400;
 
+/**
+ * Voice processing is tuned for speech: gating chews the tails off held notes
+ * and gain riding flattens the dynamics the transcriber reads as phrasing.
+ * Browsers that reject these constraints fall back to their defaults.
+ */
+const HUM_AUDIO: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
+async function openMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: HUM_AUDIO });
+  } catch {
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
 export function PhaseCompose() {
   const {
     setHum,
-    track,
     setTrack,
-    sensitivity,
-    setSensitivity,
     setNotes,
     setLiveNote,
     setPhase,
@@ -90,8 +102,8 @@ export function PhaseCompose() {
   );
 
   const applyTrack = useCallback(
-    (pitchTrack: PitchTrack, mode: Sensitivity) => {
-      const melody = interpretTrack(pitchTrack, mode);
+    (pitchTrack: PitchTrack) => {
+      const melody = interpretTrack(pitchTrack, "balanced");
       setNotes(melody.notes);
       setSelectedIndex(null);
       setOriginalQpm(estimateQpm(melody.notes));
@@ -112,9 +124,7 @@ export function PhaseCompose() {
     setExampleId(null);
     setSelectedIndex(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
+      const stream = await openMicrophone();
       streamRef.current = stream;
 
       const audioCtx = new AudioContext();
@@ -189,7 +199,7 @@ export function PhaseCompose() {
         setStatus(`Listening… ${Math.round(p * 100)}%`);
       });
       setTrack(pitchTrack);
-      applyTrack(pitchTrack, sensitivity);
+      applyTrack(pitchTrack);
     } catch {
       setTrack(null);
       setNotes([]);
@@ -198,12 +208,7 @@ export function PhaseCompose() {
     } finally {
       setAnalyzing(false);
     }
-  }, [applyTrack, sensitivity, setHum, setLiveNote, setNotes, setStatus, setTrack, stopTracks]);
-
-  const changeSensitivity = (mode: Sensitivity) => {
-    setSensitivity(mode);
-    if (track) applyTrack(track, mode);
-  };
+  }, [applyTrack, setHum, setLiveNote, setNotes, setStatus, setTrack, stopTracks]);
 
   const chooseExample = (id: ExampleId) => {
     const example = EXAMPLES.find((item) => item.id === id);
@@ -450,20 +455,6 @@ export function PhaseCompose() {
               <p className="hall-signage mt-4 text-xs normal-case text-ivory-muted/60">
                 {ENSEMBLES.find((ens) => ens.id === style)?.blurb}
               </p>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-center gap-6 text-xs tracking-widest text-ivory-muted uppercase">
-              {track &&
-                SENSITIVITY_LABELS.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => changeSensitivity(s.id)}
-                    className={sensitivity === s.id ? "text-brass" : "hover:text-ivory"}
-                  >
-                    {s.label}
-                  </button>
-                ))}
             </div>
 
             <div className="flex justify-center pt-4">

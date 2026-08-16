@@ -158,8 +158,27 @@ export function pitchesInRange(cls: number, min: number, max: number): number[] 
 }
 
 const SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+/** Gleitz midi-js SoundFonts (FluidR3, MusyngKite) spell accidentals as flats. */
+const FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 
-/** Soundfont sample keys are sharp-spelled scientific names (C4 = 60). */
+function octaveOf(midi: number) {
+  return Math.floor(midi / 12) - 1;
+}
+
+/**
+ * Canonical FluidR3 / Gleitz sample key for a MIDI number (C4 = 60, Db4 = 61).
+ * Asking for C#4 loads nothing — those JSON files do not contain sharp names —
+ * and the player then skips the note in silence.
+ */
 export function midiToName(midi: number): string {
-  return `${SHARP_NAMES[pc(midi)]}${Math.floor(midi / 12) - 1}`;
+  return `${FLAT_NAMES[pc(midi)]}${octaveOf(midi)}`;
+}
+
+/** Both spellings, so a notes= filter matches whichever key the file used. */
+export function midiToSoundfontNames(midi: number): string[] {
+  const oct = octaveOf(midi);
+  const i = pc(midi);
+  const names = [`${FLAT_NAMES[i]}${oct}`];
+  if (SHARP_NAMES[i] !== FLAT_NAMES[i]) names.push(`${SHARP_NAMES[i]}${oct}`);
+  return names;
 }
